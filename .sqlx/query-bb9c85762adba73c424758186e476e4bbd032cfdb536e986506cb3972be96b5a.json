@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO session_feedback (\n            user_id, plan_id, week_number, weekday,\n            feeling, pain, notes, actual_km, ai_advice\n        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)\n        ON CONFLICT (plan_id, week_number, weekday) DO UPDATE SET\n            feeling      = EXCLUDED.feeling,\n            pain         = EXCLUDED.pain,\n            notes        = EXCLUDED.notes,\n            actual_km    = EXCLUDED.actual_km,\n            ai_advice    = EXCLUDED.ai_advice,\n            completed_at = NOW()\n        RETURNING id\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Int2",
+        "Int2",
+        "Int2",
+        "Bool",
+        "Text",
+        "Float4",
+        "Jsonb"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "bb9c85762adba73c424758186e476e4bbd032cfdb536e986506cb3972be96b5a"
+}

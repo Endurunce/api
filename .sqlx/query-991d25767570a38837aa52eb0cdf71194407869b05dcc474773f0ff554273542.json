@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE injury_reports\n        SET recovery_status = 'resolved', resolved_at = CURRENT_DATE, updated_at = NOW()\n        WHERE id = $1 AND user_id = $2 AND recovery_status != 'resolved'\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "991d25767570a38837aa52eb0cdf71194407869b05dcc474773f0ff554273542"
+}
