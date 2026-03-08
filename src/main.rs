@@ -39,15 +39,21 @@ async fn main() {
     let state = AppState { db };
 
     let app = Router::new()
-        // Public
-        .route("/health",                get(routes::health::health_check))
-        .route("/api/auth/register",     post(routes::auth::register))
-        .route("/api/auth/login",        post(routes::auth::login))
-        .route("/api/strava/callback",   get(routes::strava::callback))
+        // Health
+        .route("/health", get(routes::health::health_check))
+        // Auth — email/password
+        .route("/api/auth/register", post(routes::auth::register))
+        .route("/api/auth/login",    post(routes::auth::login))
+        // Auth — Strava OAuth (login/register)
+        .route("/api/auth/strava",            get(routes::strava::auth_url))
+        .route("/api/strava/callback",        get(routes::strava::callback))
+        // Auth — Google OAuth
+        .route("/api/auth/google",            get(routes::google::auth_url))
+        .route("/api/auth/google/callback",   get(routes::google::callback))
         // Plans (protected)
-        .route("/api/plans/generate",    post(routes::plans::generate))
-        .route("/api/plans",             get(routes::plans::get_active))
-        .route("/api/plans/:plan_id",    get(routes::plans::get_by_id))
+        .route("/api/plans/generate", post(routes::plans::generate))
+        .route("/api/plans",          get(routes::plans::get_active))
+        .route("/api/plans/:plan_id", get(routes::plans::get_by_id))
         // Session feedback (protected)
         .route(
             "/api/plans/:plan_id/weeks/:week/days/:weekday/complete",
@@ -59,9 +65,13 @@ async fn main() {
             .get(routes::injuries::list_injuries),
         )
         .route("/api/injuries/:id/resolve", patch(routes::injuries::resolve_injury))
-        // Strava (protected)
+        // Strava — link existing account (protected)
         .route("/api/strava/connect",    get(routes::strava::connect))
         .route("/api/strava/activities", get(routes::strava::activities))
+        // Admin (protected + is_admin)
+        .route("/api/admin/stats",             get(routes::admin::stats))
+        .route("/api/admin/users",             get(routes::admin::list_users))
+        .route("/api/admin/users/:id/admin",   patch(routes::admin::set_admin))
         .with_state(state)
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http());

@@ -17,16 +17,32 @@ pub struct StravaConnectResponse {
     pub auth_url: String,
 }
 
-/// GET /api/strava/connect — returns the OAuth URL for the client to redirect to
+/// GET /api/auth/strava — public, returns OAuth URL for login/registration (no JWT needed)
+pub async fn auth_url() -> ApiResult<Json<StravaConnectResponse>> {
+    let client_id = std::env::var("STRAVA_CLIENT_ID")
+        .map_err(|_| AppError::Internal(anyhow::anyhow!("STRAVA_CLIENT_ID not set")))?;
+    let redirect_uri = std::env::var("STRAVA_REDIRECT_URI")
+        .map_err(|_| AppError::Internal(anyhow::anyhow!("STRAVA_REDIRECT_URI not set")))?;
+
+    let auth_url = format!(
+        "https://www.strava.com/oauth/authorize?client_id={}&redirect_uri={}&response_type=code&approval_prompt=auto&scope=activity:read_all&state=login",
+        client_id,
+        urlencoding::encode(&redirect_uri),
+    );
+
+    Ok(Json(StravaConnectResponse { auth_url }))
+}
+
+/// GET /api/strava/connect — protected, returns OAuth URL for linking to an existing account
 pub async fn connect(claims: Claims) -> ApiResult<Json<StravaConnectResponse>> {
     let client_id = std::env::var("STRAVA_CLIENT_ID")
         .map_err(|_| AppError::Internal(anyhow::anyhow!("STRAVA_CLIENT_ID not set")))?;
     let redirect_uri = std::env::var("STRAVA_REDIRECT_URI")
         .map_err(|_| AppError::Internal(anyhow::anyhow!("STRAVA_REDIRECT_URI not set")))?;
 
-    // Encode user_id in the state parameter using JWT
+    // Encode user_id in state so callback can link the account
     let secret = std::env::var("JWT_SECRET").unwrap_or_else(|_| "secret".into());
-    let state_token = auth::encode_token(claims.sub, &claims.email, &secret)?;
+    let state_token = auth::encode_token(claims.sub, &claims.email, claims.is_admin, &secret)?;
 
     let auth_url = format!(
         "https://www.strava.com/oauth/authorize?client_id={}&redirect_uri={}&response_type=code&approval_prompt=auto&scope=activity:read_all&state={}",
@@ -55,17 +71,21 @@ struct StravaTokenResponse {
 #[derive(Debug, Deserialize)]
 struct StravaAthlete {
     id: i64,
+    #[serde(default)]
+    firstname: Option<String>,
+    #[serde(default)]
+    lastname: Option<String>,
+    #[serde(default)]
+    profile: Option<String>,
+    #[serde(default)]
+    email: Option<String>,
 }
 
-/// GET /api/strava/callback?code=...&state=... — public, called by Strava after auth
+/// GET /api/strava/callback — handles both login (state="login") and account linking (state=JWT)
 pub async fn callback(
     State(state): State<AppState>,
     Query(params): Query<CallbackParams>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    // Recover user_id from the state JWT
-    let secret = std::env::var("JWT_SECRET").unwrap_or_else(|_| "secret".into());
-    let claims = auth::decode_token(&params.state, &secret)?;
-
     let client_id = std::env::var("STRAVA_CLIENT_ID")
         .map_err(|_| AppError::Internal(anyhow::anyhow!("STRAVA_CLIENT_ID not set")))?;
     let client_secret = std::env::var("STRAVA_CLIENT_SECRET")
@@ -96,9 +116,32 @@ pub async fn callback(
     let expires_at = chrono::DateTime::from_timestamp(token_resp.expires_at, 0)
         .unwrap_or_else(|| Utc::now() + Duration::hours(6));
 
+    let display_name = match (&token_resp.athlete.firstname, &token_resp.athlete.lastname) {
+        (Some(f), Some(l)) => Some(format!("{} {}", f, l)),
+        (Some(f), None)    => Some(f.clone()),
+        _                  => None,
+    };
+
+    let secret = std::env::var("JWT_SECRET").unwrap_or_else(|_| "secret".into());
+
+    // State = "login" → find/create user; state = JWT → link to existing account
+    let (user_id, email, is_admin) = if params.state == "login" {
+        db::users::find_or_create_by_strava(
+            &state.db,
+            token_resp.athlete.id,
+            token_resp.athlete.email.as_deref(),
+            display_name.as_deref(),
+            token_resp.athlete.profile.as_deref(),
+        ).await.map_err(AppError::Database)?
+    } else {
+        // Link mode: state is a JWT containing the existing user_id
+        let claims = auth::decode_token(&params.state, &secret)?;
+        (claims.sub, claims.email, claims.is_admin)
+    };
+
     db::strava::upsert_tokens(
         &state.db,
-        claims.sub,
+        user_id,
         token_resp.athlete.id,
         &token_resp.access_token,
         &token_resp.refresh_token,
@@ -106,6 +149,18 @@ pub async fn callback(
         "activity:read_all",
     )
     .await?;
+
+    // If login mode, return a JWT so the client can authenticate
+    if params.state == "login" {
+        let token = auth::encode_token(user_id, &email, is_admin, &secret)?;
+        return Ok(Json(serde_json::json!({
+            "token": token,
+            "user_id": user_id,
+            "email": email,
+            "is_admin": is_admin,
+            "athlete_id": token_resp.athlete.id,
+        })));
+    }
 
     Ok(Json(serde_json::json!({
         "connected": true,

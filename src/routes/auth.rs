@@ -25,6 +25,7 @@ pub struct AuthResponse {
     pub token: String,
     pub user_id: uuid::Uuid,
     pub email: String,
+    pub is_admin: bool,
 }
 
 pub async fn register(
@@ -48,9 +49,9 @@ pub async fn register(
     let user_id = db::users::insert(&state.db, &req.email, &hash).await?;
 
     let secret = std::env::var("JWT_SECRET").unwrap_or_else(|_| "secret".into());
-    let token = auth::encode_token(user_id, &req.email, &secret)?;
+    let token = auth::encode_token(user_id, &req.email, false, &secret)?;
 
-    Ok((StatusCode::CREATED, Json(AuthResponse { token, user_id, email: req.email })))
+    Ok((StatusCode::CREATED, Json(AuthResponse { token, user_id, email: req.email, is_admin: false })))
 }
 
 pub async fn login(
@@ -68,8 +69,10 @@ pub async fn login(
         return Err(AppError::BadRequest("Invalid email or password".into()));
     }
 
-    let secret = std::env::var("JWT_SECRET").unwrap_or_else(|_| "secret".into());
-    let token = auth::encode_token(user.id, &user.email, &secret)?;
+    let is_admin = db::users::fetch_is_admin(&state.db, user.id).await?;
 
-    Ok(Json(AuthResponse { token, user_id: user.id, email: user.email }))
+    let secret = std::env::var("JWT_SECRET").unwrap_or_else(|_| "secret".into());
+    let token = auth::encode_token(user.id, &user.email, is_admin, &secret)?;
+
+    Ok(Json(AuthResponse { token, user_id: user.id, email: user.email, is_admin }))
 }
