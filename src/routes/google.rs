@@ -140,6 +140,20 @@ pub async fn callback(
         return Ok(CallbackResponse::Redirect(Redirect::to(&redirect_url)));
     }
 
+    // Flutter web → redirect to app URL with token in hash
+    if state_val == "web" {
+        let app_url = std::env::var("APP_URL")
+            .unwrap_or_else(|_| "https://app.endurunce.nl".into());
+        let redirect_url = format!(
+            "{}/#token={}&is_admin={}&email={}",
+            app_url,
+            jwt,
+            is_admin,
+            urlencoding::encode(&email),
+        );
+        return Ok(CallbackResponse::Redirect(Redirect::to(&redirect_url)));
+    }
+
     // Mobile app → redirect to custom scheme
     if state_val == "app" {
         let redirect_url = format!(
