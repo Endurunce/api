@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT COUNT(*) as \"count!\"\n        FROM coach_messages\n        WHERE user_id = $1\n          AND role = 'user'\n          AND created_at > NOW() - ($2::bigint * INTERVAL '1 minute')\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "count!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "c4c013b93b213646f20a1ecf915842437066c65bf2dc66fba232a9a8fbb1d37c"
+}

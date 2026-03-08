@@ -68,6 +68,29 @@ pub async fn fetch_messages(
         .collect())
 }
 
+/// Count user-role messages sent within the last `minutes` minutes.
+pub async fn count_recent_user_messages(
+    db: &PgPool,
+    user_id: Uuid,
+    minutes: i64,
+) -> Result<i64, sqlx::Error> {
+    let row = sqlx::query!(
+        r#"
+        SELECT COUNT(*) as "count!"
+        FROM coach_messages
+        WHERE user_id = $1
+          AND role = 'user'
+          AND created_at > NOW() - ($2::bigint * INTERVAL '1 minute')
+        "#,
+        user_id,
+        minutes,
+    )
+    .fetch_one(db)
+    .await?;
+
+    Ok(row.count)
+}
+
 /// Keep the newest `keep` messages per user, delete the rest.
 pub async fn prune_old_messages(
     db: &PgPool,

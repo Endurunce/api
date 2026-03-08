@@ -32,12 +32,39 @@ pub async fn send_message(
     claims: Claims,
     Json(req): Json<SendMessageRequest>,
 ) -> ApiResult<Json<db::coach::CoachMessage>> {
-    if req.content.trim().is_empty() {
+    const MAX_CHARS: usize  = 1_000;
+    const HOURLY_LIMIT: i64 =     20;
+    const DAILY_LIMIT: i64  =    100;
+
+    let text = req.content.trim();
+
+    if text.is_empty() {
         return Err(AppError::BadRequest("Bericht mag niet leeg zijn".into()));
+    }
+    if text.chars().count() > MAX_CHARS {
+        return Err(AppError::BadRequest(
+            format!("Bericht is te lang (max {} tekens).", MAX_CHARS)
+        ));
+    }
+
+    // Rate limiting — check hourly and daily quotas
+    let (hourly, daily) = tokio::join!(
+        db::coach::count_recent_user_messages(&state.db, claims.sub, 60),
+        db::coach::count_recent_user_messages(&state.db, claims.sub, 60 * 24),
+    );
+    if hourly.map_err(AppError::Database)? >= HOURLY_LIMIT {
+        return Err(AppError::TooManyRequests(
+            format!("Je hebt het uurlimiet van {} berichten bereikt. Probeer later opnieuw.", HOURLY_LIMIT)
+        ));
+    }
+    if daily.map_err(AppError::Database)? >= DAILY_LIMIT {
+        return Err(AppError::TooManyRequests(
+            format!("Je hebt het daglimiet van {} berichten bereikt. Morgen kun je weer verder.", DAILY_LIMIT)
+        ));
     }
 
     // Save user turn
-    db::coach::save_message(&state.db, claims.sub, "user", req.content.trim())
+    db::coach::save_message(&state.db, claims.sub, "user", text)
         .await
         .map_err(AppError::Database)?;
 
