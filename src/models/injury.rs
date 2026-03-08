@@ -62,3 +62,64 @@ impl InjuryReport {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use uuid::Uuid;
+    use chrono::NaiveDate;
+
+    fn injury(severity: u8, can_run: bool) -> InjuryReport {
+        InjuryReport {
+            id: Uuid::new_v4(),
+            user_id: Uuid::new_v4(),
+            reported_at: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+            locations: vec![BodyLocation::Knee],
+            severity,
+            can_walk: true,
+            can_run,
+            description: None,
+            recovery_status: RecoveryStatus::Active,
+        }
+    }
+
+    #[test]
+    fn severity_1_to_3_is_mild() {
+        assert_eq!(injury(1, true).severity_class(), InjurySeverityClass::Mild);
+        assert_eq!(injury(2, true).severity_class(), InjurySeverityClass::Mild);
+        assert_eq!(injury(3, true).severity_class(), InjurySeverityClass::Mild);
+    }
+
+    #[test]
+    fn severity_4_to_6_is_moderate() {
+        assert_eq!(injury(4, true).severity_class(), InjurySeverityClass::Moderate);
+        assert_eq!(injury(5, true).severity_class(), InjurySeverityClass::Moderate);
+        assert_eq!(injury(6, true).severity_class(), InjurySeverityClass::Moderate);
+    }
+
+    #[test]
+    fn severity_7_and_above_is_severe() {
+        assert_eq!(injury(7, true).severity_class(), InjurySeverityClass::Severe);
+        assert_eq!(injury(9, true).severity_class(), InjurySeverityClass::Severe);
+        assert_eq!(injury(10, true).severity_class(), InjurySeverityClass::Severe);
+    }
+
+    #[test]
+    fn cannot_run_is_always_severe_regardless_of_score() {
+        assert_eq!(injury(1, false).severity_class(), InjurySeverityClass::Severe);
+        assert_eq!(injury(3, false).severity_class(), InjurySeverityClass::Severe);
+        assert_eq!(injury(6, false).severity_class(), InjurySeverityClass::Severe);
+    }
+
+    #[test]
+    fn boundary_between_mild_and_moderate_is_4() {
+        assert_eq!(injury(3, true).severity_class(), InjurySeverityClass::Mild);
+        assert_eq!(injury(4, true).severity_class(), InjurySeverityClass::Moderate);
+    }
+
+    #[test]
+    fn boundary_between_moderate_and_severe_is_7() {
+        assert_eq!(injury(6, true).severity_class(), InjurySeverityClass::Moderate);
+        assert_eq!(injury(7, true).severity_class(), InjurySeverityClass::Severe);
+    }
+}

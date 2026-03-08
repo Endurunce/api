@@ -263,3 +263,308 @@ fn duration_cap(day_idx: u8, session_type: &SessionType, raw_km: f32, profile: &
     let max_km = dur.max_minutes as f32 / pace;
     raw_km.min(max_km)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::profile::*;
+    use uuid::Uuid;
+
+    fn base_profile() -> Profile {
+        Profile {
+            id: Uuid::new_v4(),
+            user_id: Uuid::new_v4(),
+            name: "Test Runner".into(),
+            age: 35,
+            gender: Gender::Male,
+            running_years: RunningExperience::TwoToFiveYears,
+            weekly_km: 55.0,
+            previous_ultra: PreviousUltra::None,
+            time_10k: None,
+            time_half_marathon: None,
+            time_marathon: None,
+            race_goal: RaceGoal::Marathon,
+            race_date: None,
+            terrain: Terrain::Road,
+            training_days: vec![Weekday(0), Weekday(2), Weekday(4), Weekday(6)],
+            max_duration_per_day: vec![],
+            long_run_day: Weekday(6),
+            max_hr: Some(185),
+            rest_hr: 55,
+            hr_zones: None,
+            sleep_hours: SleepCategory::SevenToEight,
+            complaints: None,
+            previous_injuries: vec![],
+        }
+    }
+
+    // ── Week count ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn default_week_count_without_race_date() {
+        // Marathon default = 16 (clamped between min 12 and max 24)
+        let plan = generate_plan(&base_profile());
+        assert_eq!(plan.weeks.len(), 16);
+    }
+
+    #[test]
+    fn race_date_soon_clamps_to_min_weeks() {
+        let mut profile = base_profile(); // Marathon min = 12
+        let soon = chrono::Local::now().date_naive() + chrono::Duration::days(7);
+        profile.race_date = Some(soon);
+        let plan = generate_plan(&profile);
+        assert_eq!(plan.weeks.len() as u8, RaceGoal::Marathon.min_weeks());
+    }
+
+    #[test]
+    fn race_date_far_clamps_to_max_weeks() {
+        let mut profile = base_profile(); // Marathon max = 24
+        let far = chrono::Local::now().date_naive() + chrono::Duration::days(365 * 2);
+        profile.race_date = Some(far);
+        let plan = generate_plan(&profile);
+        assert_eq!(plan.weeks.len() as u8, RaceGoal::Marathon.max_weeks());
+    }
+
+    // ── Structure ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn week_numbers_are_sequential_from_1() {
+        let plan = generate_plan(&base_profile());
+        for (i, week) in plan.weeks.iter().enumerate() {
+            assert_eq!(week.week_number, (i + 1) as u8);
+        }
+    }
+
+    #[test]
+    fn every_week_has_exactly_7_days() {
+        let plan = generate_plan(&base_profile());
+        for week in &plan.weeks {
+            assert_eq!(week.days.len(), 7, "week {} has {} days", week.week_number, week.days.len());
+        }
+    }
+
+    #[test]
+    fn weekday_indices_are_0_through_6() {
+        let plan = generate_plan(&base_profile());
+        for week in &plan.weeks {
+            for (i, day) in week.days.iter().enumerate() {
+                assert_eq!(day.weekday, i as u8);
+            }
+        }
+    }
+
+    // ── Training days ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn training_days_are_not_rest() {
+        let profile = base_profile(); // Mon/Wed/Fri/Sun
+        let plan = generate_plan(&profile);
+        for week in plan.weeks.iter().take(plan.weeks.len() - 1) {
+            for day in &week.days {
+                if [0u8, 2, 4, 6].contains(&day.weekday) {
+                    assert_ne!(
+                        day.session_type, SessionType::Rest,
+                        "training day {} in week {} should not be rest", day.weekday, week.week_number
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn non_training_days_are_rest() {
+        let profile = base_profile(); // Tue/Thu/Sat are rest
+        let plan = generate_plan(&profile);
+        for week in &plan.weeks {
+            for day in &week.days {
+                if [1u8, 3, 5].contains(&day.weekday) {
+                    assert_eq!(
+                        day.session_type, SessionType::Rest,
+                        "non-training day {} in week {} should be rest", day.weekday, week.week_number
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn long_run_day_has_long_session_in_regular_weeks() {
+        let profile = base_profile(); // long day = Sunday (6)
+        let plan = generate_plan(&profile);
+        let non_race_weeks = plan.weeks.len() - 1;
+
+        let long_count = plan.weeks.iter()
+            .take(non_race_weeks)
+            .filter(|w| !w.is_recovery)
+            .filter(|w| w.days[6].session_type == SessionType::Long)
+            .count();
+
+        let expected = plan.weeks.iter()
+            .take(non_race_weeks)
+            .filter(|w| !w.is_recovery)
+            .count();
+
+        assert!(
+            long_count >= expected / 2,
+            "most non-recovery weeks should have Long on long day (got {long_count}/{expected})"
+        );
+    }
+
+    // ── Recovery weeks ────────────────────────────────────────────────────────
+
+    #[test]
+    fn every_4th_week_is_recovery() {
+        let plan = generate_plan(&base_profile());
+        for week in &plan.weeks {
+            if week.week_number % 4 == 0 {
+                assert!(week.is_recovery, "week {} should be a recovery week", week.week_number);
+            }
+        }
+    }
+
+    #[test]
+    fn non_4th_weeks_are_not_recovery() {
+        let plan = generate_plan(&base_profile());
+        for week in &plan.weeks {
+            if week.week_number % 4 != 0 {
+                assert!(!week.is_recovery, "week {} should not be recovery", week.week_number);
+            }
+        }
+    }
+
+    // ── Race week ─────────────────────────────────────────────────────────────
+
+    #[test]
+    fn last_week_contains_race_day() {
+        let plan = generate_plan(&base_profile());
+        let last = plan.weeks.last().unwrap();
+        let has_race = last.days.iter().any(|d| d.session_type == SessionType::Race);
+        assert!(has_race, "last week should contain a Race day");
+    }
+
+    #[test]
+    fn race_day_km_matches_race_distance() {
+        let profile = base_profile(); // Marathon = 42.2 km
+        let plan = generate_plan(&profile);
+        let last = plan.weeks.last().unwrap();
+        let race_day = last.days.iter().find(|d| d.session_type == SessionType::Race).unwrap();
+        assert_eq!(race_day.target_km, 42.2);
+    }
+
+    #[test]
+    fn race_day_falls_on_long_run_day() {
+        let profile = base_profile(); // long day = Sunday (6)
+        let plan = generate_plan(&profile);
+        let last = plan.weeks.last().unwrap();
+        let race_day = last.days.iter().find(|d| d.session_type == SessionType::Race).unwrap();
+        assert_eq!(race_day.weekday, profile.long_run_day.0);
+    }
+
+    // ── Volume ────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn active_weeks_have_positive_km() {
+        let plan = generate_plan(&base_profile());
+        for week in plan.weeks.iter().take(plan.weeks.len() - 1) {
+            assert!(week.target_km > 0.0, "week {} has 0 target km", week.week_number);
+        }
+    }
+
+    #[test]
+    fn running_days_have_minimum_3km() {
+        let plan = generate_plan(&base_profile());
+        for week in &plan.weeks {
+            for day in &week.days {
+                if day.session_type.is_running() && day.session_type != SessionType::Race {
+                    assert!(
+                        day.target_km >= 3.0,
+                        "day {} in week {} has {:.1} km, expected >= 3.0",
+                        day.weekday, week.week_number, day.target_km
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn older_athlete_gets_reduced_volume() {
+        let mut young = base_profile();
+        young.age = 30;
+        let mut old = base_profile();
+        old.age = 60;
+
+        let young_plan = generate_plan(&young);
+        let old_plan = generate_plan(&old);
+
+        let young_peak: f32 = young_plan.weeks.iter().map(|w| w.target_km).fold(0.0_f32, f32::max);
+        let old_peak:   f32 = old_plan.weeks.iter().map(|w| w.target_km).fold(0.0_f32, f32::max);
+
+        assert!(old_peak < young_peak, "older athlete should have lower peak km");
+    }
+
+    // ── Duration cap ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn duration_cap_limits_session_km() {
+        let mut profile = base_profile();
+        // Cap Sunday (long day, 6.5 min/km) to 60 min → max 9.23 km
+        profile.max_duration_per_day = vec![
+            DayDuration { day: Weekday(6), max_minutes: 60 },
+        ];
+        let plan = generate_plan(&profile);
+
+        let max_allowed = 60.0_f32 / 6.5 + 0.01;
+        for week in &plan.weeks {
+            let sunday = &week.days[6];
+            if sunday.session_type == SessionType::Long {
+                assert!(
+                    sunday.target_km <= max_allowed,
+                    "week {} long day km {:.1} exceeds cap {:.1}", week.week_number, sunday.target_km, max_allowed
+                );
+            }
+        }
+    }
+
+    // ── Session variety ───────────────────────────────────────────────────────
+
+    #[test]
+    fn trail_ultra_plan_includes_hike_sessions() {
+        let mut profile = base_profile();
+        profile.race_goal = RaceGoal::HundredKm;
+        profile.terrain = Terrain::Trail;
+        let plan = generate_plan(&profile);
+
+        let has_hike = plan.weeks.iter()
+            .any(|w| w.days.iter().any(|d| d.session_type == SessionType::Hike));
+        assert!(has_hike, "trail ultra plan should include Hike sessions");
+    }
+
+    #[test]
+    fn speed_goal_includes_tempo_and_interval() {
+        let mut profile = base_profile();
+        profile.race_goal = RaceGoal::Sub3Marathon;
+        let plan = generate_plan(&profile);
+
+        let has_tempo    = plan.weeks.iter().any(|w| w.days.iter().any(|d| d.session_type == SessionType::Tempo));
+        let has_interval = plan.weeks.iter().any(|w| w.days.iter().any(|d| d.session_type == SessionType::Interval));
+        assert!(has_tempo,    "sub-3 marathon plan should have Tempo sessions");
+        assert!(has_interval, "sub-3 marathon plan should have Interval sessions");
+    }
+
+    // ── Plan identity ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn plan_is_assigned_to_correct_user() {
+        let profile = base_profile();
+        let plan = generate_plan(&profile);
+        assert_eq!(plan.user_id, profile.user_id);
+    }
+
+    #[test]
+    fn each_plan_gets_unique_id() {
+        let profile = base_profile();
+        let plan1 = generate_plan(&profile);
+        let plan2 = generate_plan(&profile);
+        assert_ne!(plan1.id, plan2.id);
+    }
+}

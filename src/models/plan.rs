@@ -125,3 +125,120 @@ impl SessionType {
         !matches!(self, SessionType::Rest | SessionType::Cross)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_day(session_type: SessionType, target_km: f32, adjusted_km: Option<f32>) -> Day {
+        Day {
+            weekday: 0,
+            session_type,
+            target_km,
+            adjusted_km,
+            completed: false,
+            notes: None,
+            feedback: None,
+            strava_activity_id: None,
+        }
+    }
+
+    // ── Day ──────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn effective_km_uses_adjusted_when_set() {
+        let day = make_day(SessionType::Easy, 10.0, Some(8.0));
+        assert_eq!(day.effective_km(), 8.0);
+    }
+
+    #[test]
+    fn effective_km_falls_back_to_target() {
+        let day = make_day(SessionType::Easy, 10.0, None);
+        assert_eq!(day.effective_km(), 10.0);
+    }
+
+    #[test]
+    fn effective_km_adjusted_zero_is_respected() {
+        let day = make_day(SessionType::Easy, 10.0, Some(0.0));
+        assert_eq!(day.effective_km(), 0.0);
+    }
+
+    // ── SessionType ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn rest_and_cross_are_not_running() {
+        assert!(!SessionType::Rest.is_running());
+        assert!(!SessionType::Cross.is_running());
+    }
+
+    #[test]
+    fn all_other_types_are_running() {
+        for t in [
+            SessionType::Easy, SessionType::Tempo, SessionType::Long,
+            SessionType::Interval, SessionType::Hike, SessionType::Race,
+        ] {
+            assert!(t.is_running(), "{t:?} should be considered running");
+        }
+    }
+
+    #[test]
+    fn pace_is_none_for_non_running_types() {
+        assert!(SessionType::Rest.pace_min_per_km().is_none());
+        assert!(SessionType::Cross.pace_min_per_km().is_none());
+        assert!(SessionType::Race.pace_min_per_km().is_none());
+    }
+
+    #[test]
+    fn pace_is_some_for_running_types() {
+        for t in [
+            SessionType::Easy, SessionType::Tempo, SessionType::Long,
+            SessionType::Interval, SessionType::Hike,
+        ] {
+            assert!(t.pace_min_per_km().is_some(), "{t:?} should have a pace");
+            assert!(t.pace_min_per_km().unwrap() > 0.0, "{t:?} pace must be positive");
+        }
+    }
+
+    #[test]
+    fn tempo_is_faster_than_easy() {
+        let tempo = SessionType::Tempo.pace_min_per_km().unwrap();
+        let easy  = SessionType::Easy.pace_min_per_km().unwrap();
+        assert!(tempo < easy, "tempo pace should be faster (lower min/km) than easy");
+    }
+
+    #[test]
+    fn target_zones_not_empty_for_running() {
+        for t in [
+            SessionType::Easy, SessionType::Tempo, SessionType::Long,
+            SessionType::Interval, SessionType::Hike, SessionType::Race,
+        ] {
+            assert!(!t.target_zones().is_empty(), "{t:?} should have target zones");
+        }
+    }
+
+    #[test]
+    fn rest_has_no_target_zones() {
+        assert!(SessionType::Rest.target_zones().is_empty());
+    }
+
+    // ── Phase ────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn phase_labels_are_unique() {
+        let labels = [
+            Phase::BuildOne.label(),
+            Phase::BuildTwo.label(),
+            Phase::Peak.label(),
+            Phase::Taper.label(),
+        ];
+        let unique: std::collections::HashSet<_> = labels.iter().collect();
+        assert_eq!(unique.len(), 4, "all phase labels should be unique");
+    }
+
+    #[test]
+    fn phase_labels_are_nonempty() {
+        for phase in [Phase::BuildOne, Phase::BuildTwo, Phase::Peak, Phase::Taper] {
+            assert!(!phase.label().is_empty(), "{phase:?} label should not be empty");
+        }
+    }
+}

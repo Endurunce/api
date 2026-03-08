@@ -224,3 +224,174 @@ pub enum SleepCategory {
     SevenToEight,
     MoreThanEight,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── RaceGoal ─────────────────────────────────────────────────────────────
+
+    #[test]
+    fn race_goal_distances_correct() {
+        assert_eq!(RaceGoal::FiveKm.distance_km(), 5.0);
+        assert_eq!(RaceGoal::TenKm.distance_km(), 10.0);
+        assert_eq!(RaceGoal::HalfMarathon.distance_km(), 21.1);
+        assert_eq!(RaceGoal::Marathon.distance_km(), 42.2);
+        assert_eq!(RaceGoal::Sub3Marathon.distance_km(), 42.2);
+        assert_eq!(RaceGoal::Sub4Marathon.distance_km(), 42.2);
+        assert_eq!(RaceGoal::FiftyKm.distance_km(), 50.0);
+        assert_eq!(RaceGoal::HundredKm.distance_km(), 100.0);
+        assert_eq!(RaceGoal::Custom { distance_km: 75.0 }.distance_km(), 75.0);
+    }
+
+    #[test]
+    fn is_ultra_threshold_is_50km() {
+        assert!(!RaceGoal::Marathon.is_ultra());
+        assert!(!RaceGoal::HalfMarathon.is_ultra());
+        assert!(!RaceGoal::Custom { distance_km: 49.9 }.is_ultra());
+        assert!(RaceGoal::FiftyKm.is_ultra());
+        assert!(RaceGoal::HundredKm.is_ultra());
+        assert!(RaceGoal::Custom { distance_km: 50.0 }.is_ultra());
+        assert!(RaceGoal::Custom { distance_km: 80.0 }.is_ultra());
+    }
+
+    #[test]
+    fn is_marathon_range_42_to_50km() {
+        assert!(RaceGoal::Marathon.is_marathon());
+        assert!(RaceGoal::Sub3Marathon.is_marathon());
+        assert!(RaceGoal::Sub4Marathon.is_marathon());
+        assert!(!RaceGoal::HalfMarathon.is_marathon());
+        assert!(!RaceGoal::FiftyKm.is_marathon());
+        assert!(!RaceGoal::TenKm.is_marathon());
+    }
+
+    #[test]
+    fn is_speed_goal_only_sub_variants() {
+        assert!(!RaceGoal::Marathon.is_speed_goal());
+        assert!(!RaceGoal::HalfMarathon.is_speed_goal());
+        assert!(RaceGoal::Sub3Marathon.is_speed_goal());
+        assert!(RaceGoal::Sub4Marathon.is_speed_goal());
+    }
+
+    #[test]
+    fn min_weeks_never_exceeds_max_weeks() {
+        let goals = [
+            RaceGoal::FiveKm, RaceGoal::TenKm, RaceGoal::HalfMarathon,
+            RaceGoal::Marathon, RaceGoal::Sub3Marathon, RaceGoal::Sub4Marathon,
+            RaceGoal::FiftyKm, RaceGoal::HundredKm, RaceGoal::Custom { distance_km: 60.0 },
+        ];
+        for goal in &goals {
+            assert!(
+                goal.min_weeks() <= goal.max_weeks(),
+                "{goal:?}: min_weeks {} > max_weeks {}", goal.min_weeks(), goal.max_weeks()
+            );
+        }
+    }
+
+    #[test]
+    fn longer_race_needs_more_weeks() {
+        assert!(RaceGoal::HundredKm.min_weeks() > RaceGoal::Marathon.min_weeks());
+        assert!(RaceGoal::Marathon.min_weeks() > RaceGoal::HalfMarathon.min_weeks());
+        assert!(RaceGoal::HalfMarathon.min_weeks() > RaceGoal::TenKm.min_weeks());
+    }
+
+    #[test]
+    fn peak_km_scales_with_distance() {
+        assert!(RaceGoal::HundredKm.peak_km() > RaceGoal::FiftyKm.peak_km());
+        assert!(RaceGoal::FiftyKm.peak_km() > RaceGoal::Marathon.peak_km());
+        assert!(RaceGoal::Marathon.peak_km() > RaceGoal::HalfMarathon.peak_km());
+    }
+
+    #[test]
+    fn custom_goal_peak_km_capped_at_120() {
+        let huge = RaceGoal::Custom { distance_km: 1000.0 };
+        assert!(huge.peak_km() <= 120.0, "peak km should not exceed 120");
+    }
+
+    // ── HrZone ───────────────────────────────────────────────────────────────
+
+    #[test]
+    fn hr_zones_produces_five_zones() {
+        let zones = HrZone::calculate(190, 55);
+        assert_eq!(zones.len(), 5);
+    }
+
+    #[test]
+    fn hr_zones_are_contiguous() {
+        let zones = HrZone::calculate(190, 55);
+        for i in 0..zones.len() - 1 {
+            assert_eq!(
+                zones[i].hi, zones[i + 1].lo,
+                "zone {} hi should equal zone {} lo", i + 1, i + 2
+            );
+        }
+    }
+
+    #[test]
+    fn hr_zone5_hi_equals_max_hr() {
+        let zones = HrZone::calculate(190, 55);
+        assert_eq!(zones[4].hi, 190);
+    }
+
+    #[test]
+    fn hr_zones_lo_less_than_hi() {
+        let zones = HrZone::calculate(185, 60);
+        for zone in &zones {
+            assert!(zone.lo < zone.hi, "zone {} lo should be less than hi", zone.num);
+        }
+    }
+
+    #[test]
+    fn hr_zone1_lo_matches_karvonen_50pct() {
+        let max_hr = 190u16;
+        let rest_hr = 55u16;
+        let hrr = max_hr as f32 - rest_hr as f32;
+        let expected_lo = (rest_hr as f32 + hrr * 0.50).round() as u16;
+        let zones = HrZone::calculate(max_hr, rest_hr);
+        assert_eq!(zones[0].lo, expected_lo);
+    }
+
+    #[test]
+    fn hr_zones_numbered_1_to_5() {
+        let zones = HrZone::calculate(185, 55);
+        for (i, zone) in zones.iter().enumerate() {
+            assert_eq!(zone.num, (i + 1) as u8);
+        }
+    }
+
+    // ── Weekday ──────────────────────────────────────────────────────────────
+
+    #[test]
+    fn weekday_rejects_value_above_6() {
+        let result: Result<Weekday, _> = serde_json::from_str("7");
+        assert!(result.is_err(), "weekday 7 should be rejected");
+        let result: Result<Weekday, _> = serde_json::from_str("255");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn weekday_accepts_0_through_6() {
+        for i in 0u8..=6 {
+            let result: Result<Weekday, _> = serde_json::from_str(&i.to_string());
+            assert!(result.is_ok(), "weekday {i} should be accepted");
+            assert_eq!(result.unwrap().0, i);
+        }
+    }
+
+    #[test]
+    fn weekday_serializes_as_integer() {
+        let wd = Weekday(4);
+        let serialized = serde_json::to_string(&wd).unwrap();
+        assert_eq!(serialized, "4");
+    }
+
+    #[test]
+    fn weekday_ordering() {
+        let mon = Weekday(0);
+        let sun = Weekday(6);
+        assert!(mon < sun);
+        let mut days = vec![Weekday(6), Weekday(2), Weekday(0), Weekday(4)];
+        days.sort();
+        assert_eq!(days, vec![Weekday(0), Weekday(2), Weekday(4), Weekday(6)]);
+    }
+}
