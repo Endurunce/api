@@ -96,3 +96,41 @@ pub async fn fetch_by_user(db: &PgPool, user_id: Uuid) -> Result<Option<Uuid>, s
 
     Ok(row.map(|r| r.id))
 }
+
+/// Returns the profile as a compact JSON string for AI context injection.
+pub async fn fetch_full_by_user(
+    db: &PgPool,
+    user_id: Uuid,
+) -> Result<Option<String>, sqlx::Error> {
+    let row = sqlx::query!(
+        r#"
+        SELECT
+            name, age, gender,
+            running_years, weekly_km,
+            race_goal, race_date, terrain,
+            training_days,
+            max_hr, rest_hr,
+            sleep_hours, complaints, previous_injuries
+        FROM profiles
+        WHERE user_id = $1
+        "#,
+        user_id,
+    )
+    .fetch_optional(db)
+    .await?;
+
+    Ok(row.map(|r| {
+        format!(
+            "Naam: {}, Leeftijd: {}, Geslacht: {}, Ervaring: {}, Weekkm: {:.0}, Doel: {}, Terrein: {}, Slaap: {}, Klachten: {}",
+            r.name,
+            r.age,
+            r.gender,
+            r.running_years,
+            r.weekly_km,
+            serde_json::to_string(&r.race_goal).unwrap_or_default(),
+            r.terrain,
+            r.sleep_hours,
+            r.complaints.as_deref().unwrap_or("geen"),
+        )
+    }))
+}

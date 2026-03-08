@@ -216,6 +216,139 @@ pub struct ActivitiesParams {
     pub page: Option<u32>,
 }
 
+// ── User-provided credentials flow ────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+pub struct ExchangeCodeRequest {
+    pub client_id: String,
+    pub client_secret: String,
+    pub code: String,
+    pub redirect_uri: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ExchangeCodeResponse {
+    pub athlete_id: i64,
+    pub display_name: Option<String>,
+    pub avatar_url: Option<String>,
+    pub city: Option<String>,
+}
+
+/// POST /api/strava/exchange-code — user provides own Strava credentials
+pub async fn exchange_code(
+    State(state): State<AppState>,
+    claims: Claims,
+    Json(req): Json<ExchangeCodeRequest>,
+) -> ApiResult<Json<ExchangeCodeResponse>> {
+    let client = reqwest::Client::new();
+    let mut form = vec![
+        ("client_id",     req.client_id.as_str()),
+        ("client_secret", req.client_secret.as_str()),
+        ("code",          req.code.as_str()),
+        ("grant_type",    "authorization_code"),
+    ];
+    let redirect_uri_owned;
+    if let Some(ref uri) = req.redirect_uri {
+        redirect_uri_owned = uri.clone();
+        form.push(("redirect_uri", redirect_uri_owned.as_str()));
+    }
+
+    let resp = client
+        .post("https://www.strava.com/oauth/token")
+        .form(&form)
+        .send()
+        .await
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("Strava request error: {}", e)))?;
+
+    if !resp.status().is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        return Err(AppError::BadRequest(format!("Strava fout: {}", body)));
+    }
+
+    let token_resp: StravaTokenResponse = resp
+        .json()
+        .await
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("Strava parse error: {}", e)))?;
+
+    let expires_at = chrono::DateTime::from_timestamp(token_resp.expires_at, 0)
+        .unwrap_or_else(|| Utc::now() + Duration::hours(6));
+
+    let display_name = match (&token_resp.athlete.firstname, &token_resp.athlete.lastname) {
+        (Some(f), Some(l)) => Some(format!("{} {}", f, l)),
+        (Some(f), None) => Some(f.clone()),
+        _ => None,
+    };
+
+    // Store token with user's own credentials
+    sqlx::query!(
+        r#"
+        INSERT INTO strava_tokens (user_id, athlete_id, access_token, refresh_token, expires_at, scope, strava_client_id, strava_client_secret, display_name, avatar_url)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        ON CONFLICT (user_id) DO UPDATE SET
+            athlete_id          = EXCLUDED.athlete_id,
+            access_token        = EXCLUDED.access_token,
+            refresh_token       = EXCLUDED.refresh_token,
+            expires_at          = EXCLUDED.expires_at,
+            scope               = EXCLUDED.scope,
+            strava_client_id    = EXCLUDED.strava_client_id,
+            strava_client_secret= EXCLUDED.strava_client_secret,
+            display_name        = EXCLUDED.display_name,
+            avatar_url          = EXCLUDED.avatar_url,
+            updated_at          = NOW()
+        "#,
+        claims.sub,
+        token_resp.athlete.id,
+        token_resp.access_token,
+        token_resp.refresh_token,
+        expires_at,
+        "activity:read_all",
+        req.client_id,
+        req.client_secret,
+        display_name,
+        token_resp.athlete.profile,
+    )
+    .execute(&state.db)
+    .await
+    .map_err(AppError::Database)?;
+
+    Ok(Json(ExchangeCodeResponse {
+        athlete_id: token_resp.athlete.id,
+        display_name,
+        avatar_url: token_resp.athlete.profile,
+        city: None,
+    }))
+}
+
+/// GET /api/strava/status — check if Strava is connected
+pub async fn status(
+    State(state): State<AppState>,
+    claims: Claims,
+) -> ApiResult<Json<serde_json::Value>> {
+    let tokens = db::strava::fetch_tokens(&state.db, claims.sub)
+        .await
+        .map_err(AppError::Database)?;
+
+    if let Some(t) = tokens {
+        // Fetch athlete info from strava_tokens display_name/avatar_url
+        let row = sqlx::query!(
+            "SELECT display_name, avatar_url, athlete_id FROM strava_tokens WHERE user_id = $1",
+            claims.sub,
+        )
+        .fetch_optional(&state.db)
+        .await
+        .map_err(AppError::Database)?;
+
+        Ok(Json(serde_json::json!({
+            "connected": true,
+            "athlete_id": t.athlete_id,
+            "display_name": row.as_ref().and_then(|r| r.display_name.clone()),
+            "avatar_url": row.as_ref().and_then(|r| r.avatar_url.clone()),
+        })))
+    } else {
+        Ok(Json(serde_json::json!({ "connected": false })))
+    }
+}
+
 /// GET /api/strava/activities — fetch recent Strava activities
 pub async fn activities(
     State(state): State<AppState>,

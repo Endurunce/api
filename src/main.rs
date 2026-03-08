@@ -59,6 +59,16 @@ async fn main() {
             "/api/plans/:plan_id/weeks/:week/days/:weekday/complete",
             post(routes::feedback::complete_day),
         )
+        // Session detail advice (protected)
+        .route(
+            "/api/plans/:plan_id/weeks/:week/days/:weekday/advice",
+            get(routes::sessions::session_advice),
+        )
+        // Uncomplete a session
+        .route(
+            "/api/plans/:plan_id/weeks/:week/days/:weekday/uncomplete",
+            post(routes::sessions::uncomplete_day),
+        )
         // Injuries (protected)
         .route("/api/injuries",
             post(routes::injuries::report_injury)
@@ -66,8 +76,15 @@ async fn main() {
         )
         .route("/api/injuries/:id/resolve", patch(routes::injuries::resolve_injury))
         // Strava — link existing account (protected)
-        .route("/api/strava/connect",    get(routes::strava::connect))
-        .route("/api/strava/activities", get(routes::strava::activities))
+        .route("/api/strava/connect",         get(routes::strava::connect))
+        .route("/api/strava/exchange-code",   post(routes::strava::exchange_code))
+        .route("/api/strava/status",          get(routes::strava::status))
+        .route("/api/strava/activities",      get(routes::strava::activities))
+        // Coach (protected)
+        .route("/api/coach",
+            get(routes::coach::get_messages)
+            .post(routes::coach::send_message),
+        )
         // Admin (protected + is_admin)
         .route("/api/admin/stats",             get(routes::admin::stats))
         .route("/api/admin/users",             get(routes::admin::list_users))

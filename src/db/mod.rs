@@ -1,3 +1,4 @@
+pub mod coach;
 pub mod feedback;
 pub mod injuries;
 pub mod plans;
