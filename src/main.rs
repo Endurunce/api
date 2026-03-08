@@ -81,7 +81,7 @@ async fn main() {
         .route("/api/strava/status",          get(routes::strava::status))
         .route("/api/strava/activities",      get(routes::strava::activities))
         // Profile (protected)
-        .route("/api/profiles/me", get(routes::profiles::me))
+        .route("/api/profiles/me", get(routes::profiles::me).patch(routes::profiles::update_me))
         // Coach (protected)
         .route("/api/coach",
             get(routes::coach::get_messages)

@@ -1,4 +1,4 @@
-use axum::{extract::State, Json};
+use axum::{extract::State, http::StatusCode, Json};
 
 use crate::{
     auth::Claims,
@@ -37,4 +37,44 @@ pub async fn me(
         }))),
         None => Ok(Json(serde_json::Value::Null)),
     }
+}
+
+#[derive(serde::Deserialize)]
+pub struct UpdateProfileBody {
+    pub name:          Option<String>,
+    pub age:           Option<i16>,
+    pub gender:        Option<String>,
+    pub weekly_km:     Option<f64>,
+    pub running_years: Option<String>,
+}
+
+/// PATCH /api/profiles/me — update editable personal fields
+pub async fn update_me(
+    State(state): State<AppState>,
+    claims: Claims,
+    Json(body): Json<UpdateProfileBody>,
+) -> ApiResult<StatusCode> {
+    sqlx::query!(
+        r#"
+        UPDATE profiles SET
+            name          = COALESCE($1, name),
+            age           = COALESCE($2, age),
+            gender        = COALESCE($3, gender),
+            weekly_km     = COALESCE($4::float4, weekly_km),
+            running_years = COALESCE($5, running_years),
+            updated_at    = NOW()
+        WHERE user_id = $6
+        "#,
+        body.name,
+        body.age,
+        body.gender,
+        body.weekly_km.map(|v| v as f32),
+        body.running_years,
+        claims.sub,
+    )
+    .execute(&state.db)
+    .await
+    .map_err(AppError::Database)?;
+
+    Ok(StatusCode::NO_CONTENT)
 }
