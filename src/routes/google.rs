@@ -144,23 +144,27 @@ pub async fn callback(
     if state_val == "web" {
         let app_url = std::env::var("APP_URL")
             .unwrap_or_else(|_| "https://app.endurunce.nl".into());
+        let name_param = user_info.name.as_deref().map(urlencoding::encode).unwrap_or_default();
         let redirect_url = format!(
-            "{}/#token={}&is_admin={}&email={}",
+            "{}/#token={}&is_admin={}&email={}&display_name={}",
             app_url,
             jwt,
             is_admin,
             urlencoding::encode(&email),
+            name_param,
         );
         return Ok(CallbackResponse::Redirect(Redirect::to(&redirect_url)));
     }
 
     // Mobile app → redirect to custom scheme
     if state_val == "app" {
+        let name_param = user_info.name.as_deref().map(urlencoding::encode).unwrap_or_default();
         let redirect_url = format!(
-            "endurunce://auth?token={}&is_admin={}&email={}",
+            "endurunce://auth?token={}&is_admin={}&email={}&display_name={}",
             jwt,
             is_admin,
             urlencoding::encode(&email),
+            name_param,
         );
         return Ok(CallbackResponse::Redirect(Redirect::to(&redirect_url)));
     }
