@@ -1,5 +1,5 @@
 # ── Stage 1: build ───────────────────────────────────────────────────────────
-FROM rust:1.82-slim-bookworm AS builder
+FROM rust:latest AS builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     pkg-config libssl-dev \
@@ -18,6 +18,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 # Build real binary
 COPY src ./src
 COPY migrations ./migrations
+COPY .sqlx ./.sqlx
 RUN touch src/main.rs
 
 ENV SQLX_OFFLINE=true
