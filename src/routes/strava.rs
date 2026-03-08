@@ -1,5 +1,6 @@
 use axum::{
     extract::{Query, State},
+    response::Redirect,
     Json,
 };
 use chrono::{Duration, Utc};
@@ -17,17 +18,25 @@ pub struct StravaConnectResponse {
     pub auth_url: String,
 }
 
-/// GET /api/auth/strava — public, returns OAuth URL for login/registration (no JWT needed)
-pub async fn auth_url() -> ApiResult<Json<StravaConnectResponse>> {
+#[derive(Debug, Deserialize)]
+pub struct AuthUrlParams {
+    pub state: Option<String>,
+}
+
+/// GET /api/auth/strava?state=login|login_web|login_admin — public, returns OAuth URL for login
+pub async fn auth_url(Query(params): Query<AuthUrlParams>) -> ApiResult<Json<StravaConnectResponse>> {
     let client_id = std::env::var("STRAVA_CLIENT_ID")
         .map_err(|_| AppError::Internal(anyhow::anyhow!("STRAVA_CLIENT_ID not set")))?;
     let redirect_uri = std::env::var("STRAVA_REDIRECT_URI")
         .map_err(|_| AppError::Internal(anyhow::anyhow!("STRAVA_REDIRECT_URI not set")))?;
 
+    let state_val = params.state.unwrap_or_else(|| "login".into());
+
     let auth_url = format!(
-        "https://www.strava.com/oauth/authorize?client_id={}&redirect_uri={}&response_type=code&approval_prompt=auto&scope=activity:read_all&state=login",
+        "https://www.strava.com/oauth/authorize?client_id={}&redirect_uri={}&response_type=code&approval_prompt=auto&scope=activity:read_all&state={}",
         client_id,
         urlencoding::encode(&redirect_uri),
+        urlencoding::encode(&state_val),
     );
 
     Ok(Json(StravaConnectResponse { auth_url }))
@@ -81,11 +90,25 @@ struct StravaAthlete {
     email: Option<String>,
 }
 
-/// GET /api/strava/callback — handles both login (state="login") and account linking (state=JWT)
+pub enum CallbackResponse {
+    Json(Json<serde_json::Value>),
+    Redirect(Redirect),
+}
+
+impl axum::response::IntoResponse for CallbackResponse {
+    fn into_response(self) -> axum::response::Response {
+        match self {
+            CallbackResponse::Json(j) => j.into_response(),
+            CallbackResponse::Redirect(r) => r.into_response(),
+        }
+    }
+}
+
+/// GET /api/strava/callback — handles login (state=login|login_web|login_admin) and account linking (state=JWT)
 pub async fn callback(
     State(state): State<AppState>,
     Query(params): Query<CallbackParams>,
-) -> ApiResult<Json<serde_json::Value>> {
+) -> Result<CallbackResponse, AppError> {
     let client_id = std::env::var("STRAVA_CLIENT_ID")
         .map_err(|_| AppError::Internal(anyhow::anyhow!("STRAVA_CLIENT_ID not set")))?;
     let client_secret = std::env::var("STRAVA_CLIENT_SECRET")
@@ -110,6 +133,7 @@ pub async fn callback(
         return Err(AppError::Internal(anyhow::anyhow!("Strava error: {}", body)));
     }
 
+
     let token_resp: StravaTokenResponse = resp.json().await
         .map_err(|e| AppError::Internal(anyhow::anyhow!("Strava response parse error: {}", e)))?;
 
@@ -123,9 +147,11 @@ pub async fn callback(
     };
 
     let secret = std::env::var("JWT_SECRET").unwrap_or_else(|_| "secret".into());
+    let state_val = params.state.as_str();
+    let is_login = matches!(state_val, "login" | "login_web" | "login_admin");
 
-    // State = "login" → find/create user; state = JWT → link to existing account
-    let (user_id, email, is_admin) = if params.state == "login" {
+    // Login states → find/create user; JWT state → link to existing account
+    let (user_id, email, is_admin) = if is_login {
         db::users::find_or_create_by_strava(
             &state.db,
             token_resp.athlete.id,
@@ -134,8 +160,7 @@ pub async fn callback(
             token_resp.athlete.profile.as_deref(),
         ).await.map_err(AppError::Database)?
     } else {
-        // Link mode: state is a JWT containing the existing user_id
-        let claims = auth::decode_token(&params.state, &secret)?;
+        let claims = auth::decode_token(state_val, &secret)?;
         (claims.sub, claims.email, claims.is_admin)
     };
 
@@ -150,22 +175,39 @@ pub async fn callback(
     )
     .await?;
 
-    // If login mode, return a JWT so the client can authenticate
-    if params.state == "login" {
-        let token = auth::encode_token(user_id, &email, is_admin, &secret)?;
-        return Ok(Json(serde_json::json!({
-            "token": token,
-            "user_id": user_id,
-            "email": email,
-            "is_admin": is_admin,
+    if !is_login {
+        return Ok(CallbackResponse::Json(Json(serde_json::json!({
+            "connected": true,
             "athlete_id": token_resp.athlete.id,
-        })));
+        }))));
     }
 
-    Ok(Json(serde_json::json!({
-        "connected": true,
+    let jwt = auth::encode_token(user_id, &email, is_admin, &secret)?;
+
+    // Admin panel redirect
+    if state_val == "login_admin" {
+        let admin_url = std::env::var("ADMIN_URL")
+            .unwrap_or_else(|_| "https://admin.endurunce.nl".into());
+        let url = format!("{}/#token={}&is_admin={}&email={}", admin_url, jwt, is_admin, urlencoding::encode(&email));
+        return Ok(CallbackResponse::Redirect(Redirect::to(&url)));
+    }
+
+    // Flutter web redirect
+    if state_val == "login_web" {
+        let app_url = std::env::var("APP_URL")
+            .unwrap_or_else(|_| "https://app.endurunce.nl".into());
+        let url = format!("{}/#token={}&is_admin={}&email={}", app_url, jwt, is_admin, urlencoding::encode(&email));
+        return Ok(CallbackResponse::Redirect(Redirect::to(&url)));
+    }
+
+    // Default: JSON for mobile app
+    Ok(CallbackResponse::Json(Json(serde_json::json!({
+        "token": jwt,
+        "user_id": user_id,
+        "email": email,
+        "is_admin": is_admin,
         "athlete_id": token_resp.athlete.id,
-    })))
+    }))))
 }
 
 #[derive(Debug, Deserialize)]
