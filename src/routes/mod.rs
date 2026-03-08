@@ -6,5 +6,6 @@ pub mod google;
 pub mod health;
 pub mod injuries;
 pub mod plans;
+pub mod profiles;
 pub mod sessions;
 pub mod strava;

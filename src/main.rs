@@ -80,6 +80,8 @@ async fn main() {
         .route("/api/strava/exchange-code",   post(routes::strava::exchange_code))
         .route("/api/strava/status",          get(routes::strava::status))
         .route("/api/strava/activities",      get(routes::strava::activities))
+        // Profile (protected)
+        .route("/api/profiles/me", get(routes::profiles::me))
         // Coach (protected)
         .route("/api/coach",
             get(routes::coach::get_messages)

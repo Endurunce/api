@@ -1,0 +1,64 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT name, age, gender, race_goal, race_date, terrain,\n               weekly_km, running_years\n        FROM profiles\n        WHERE user_id = $1\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "age",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 2,
+        "name": "gender",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "race_goal",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 4,
+        "name": "race_date",
+        "type_info": "Date"
+      },
+      {
+        "ordinal": 5,
+        "name": "terrain",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "weekly_km",
+        "type_info": "Float4"
+      },
+      {
+        "ordinal": 7,
+        "name": "running_years",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "f56d82e219c1e32637a8917720a5d4fe015545e5186bc3cfd0fd545dd8a15918"
+}
