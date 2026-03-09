@@ -32,6 +32,7 @@ pub struct Profile {
 
     // Training schedule preferences
     pub training_days: Vec<Weekday>,      // 0=Mon..6=Sun
+    pub strength_days: Vec<Weekday>,      // krachttrainingsdagen
     pub max_duration_per_day: Vec<DayDuration>,
     pub long_run_day: Weekday,
 
