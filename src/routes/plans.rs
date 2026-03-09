@@ -34,8 +34,12 @@ pub async fn generate(
     Json(req): Json<GeneratePlanRequest>,
 ) -> ApiResult<(StatusCode, Json<GeneratePlanResponse>)> {
     // Override profile user_id with the authenticated user
+    // Always generate a fresh id so client-provided sentinel UUIDs
+    // (e.g. ffffffff-ffff-ffff-ffff-ffffffffffff) don't conflict
+    // with another user's existing profile row in the primary key.
     let mut profile = req.profile;
     profile.user_id = claims.sub;
+    profile.id = Uuid::new_v4();
 
     // DPIA leeftijdsverificatie: minimumleeftijd 16 jaar (AVG art. 8)
     if profile.age_years() < 16 {
