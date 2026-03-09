@@ -21,9 +21,9 @@ pub struct SessionAdvice {
     pub main_set: String,
     pub cooldown: String,
     pub summary: String,
-    pub good_signal: String,
+    pub go_signal: String,
     pub stop_signal: String,
-    pub if_too_hard: String,
+    pub too_hard: String,
     pub why_now: String,
 }
 
@@ -53,28 +53,42 @@ pub async fn session_advice(
     let target_km = day.effective_km();
     let phase_label = week.phase.label();
     let week_km = week.target_km;
+    let notes_ctx = day.notes.as_deref().unwrap_or("");
 
     let profile_ctx = db::profiles::fetch_full_by_user(&state.db, claims.sub)
         .await
         .map_err(AppError::Database)?
         .unwrap_or_else(|| "Standaard hardloper".into());
 
+    let prescription_line = if notes_ctx.is_empty() {
+        String::new()
+    } else {
+        format!("Trainingsvoorschrift: {notes_ctx}\n")
+    };
+
     let prompt = format!(
         "Genereer een exact trainingsvoorschrift voor deze sessie als JSON.\n\
-        Sessie: {session_label}\nAfstand: {target_km:.1} km\n\
-        Fase: {phase_label}\nWeek {week_number} van {} (weekkilometrage: {week_km:.0} km)\n\
+        Sessie: {session_label}\n\
+        Afstand: {target_km:.1} km\n\
+        Fase: {phase_label}\n\
+        Week {week_number} van {} (weekkilometrage: {week_km:.0} km)\n\
+        {prescription_line}\
         Profiel: {profile_ctx}\n\
         \n\
-        Geef ALLEEN valide JSON terug, geen markdown, geen uitleg:\n\
+        REGELS:\n\
+        - Gebruik NOOIT bereiken zoals '6-8' of '3-4 min'. Kies altijd één exact getal.\n\
+        - Als het trainingsvoorschrift hierboven staat, gebruik dan precies die aantallen/tijden.\n\
+        - Geef ALLEEN valide JSON terug, geen markdown, geen uitleg buiten de JSON.\n\
+        \n\
         {{\n\
           \"goal\": \"Doel in één zin\",\n\
           \"warmup\": \"Exacte inloop instructie met tijd/km\",\n\
-          \"main_set\": \"Kern van de training met exacte tempo/herhalingen\",\n\
+          \"main_set\": \"Kern van de training met exact aantal herhalingen en duur, bijv. '6×4 min @ Z4'\",\n\
           \"cooldown\": \"Exacte uitloop instructie\",\n\
-          \"summary\": \"Korte samenvatting bijv. '6 × 1000m op 4:45 /km'\",\n\
-          \"good_signal\": \"Hoe een goede sessie voelt\",\n\
+          \"summary\": \"Korte samenvatting bijv. '6×4 min Z4 · 2 min herstel'\",\n\
+          \"go_signal\": \"Hoe een goede sessie voelt\",\n\
           \"stop_signal\": \"Stop als dit gebeurt\",\n\
-          \"if_too_hard\": \"Aanpassing als het te zwaar is\",\n\
+          \"too_hard\": \"Aanpassing als het te zwaar is\",\n\
           \"why_now\": \"Waarom staat deze training nu in het schema\"\n\
         }}",
         plan.weeks.len(),
@@ -134,79 +148,79 @@ fn fallback_advice(session_type: &SessionType, km: f32, week: u8) -> SessionAdvi
     match session_type {
         SessionType::Easy => SessionAdvice {
             goal: "Aerobe basis opbouwen en herstel bevorderen.".into(),
-            warmup: format!("1 km rustig wandelen, dan geleidelijk optempo lopen naar Z2."),
-            main_set: format!("{:.1} km op praattempo (Zone 2). Je moet een volledig gesprek kunnen voeren.", (km - 1.0).max(1.0)),
+            warmup: "1 km rustig wandelen, dan geleidelijk optempo naar Z2.".into(),
+            main_set: format!("{:.1} km op praattempo Z2. Je moet een volledig gesprek kunnen voeren.", (km - 1.0).max(1.0)),
             cooldown: "Laatste 500m uitlopen, 5 min stretchen.".into(),
             summary: format!("{:.1} km easy Z2", km),
-            good_signal: "Ademhaling gecontroleerd, hartslag < 75% max, je kunt praten.".into(),
+            go_signal: "Ademhaling rustig, hartslag < 75% max, je kunt praten.".into(),
             stop_signal: "Pijn in gewrichten, hartslag > 85% of extreme vermoeidheid.".into(),
-            if_too_hard: "Verlaag tempo met 30s/km of loop 10% minder km.".into(),
-            why_now: format!("Week {} bouwt aerobe basis voor je race-voorbereiding.", week),
+            too_hard: "Verlaag tempo met 30s/km of loop 10% minder.".into(),
+            why_now: format!("Week {} bouwt de aerobe basis voor je race-voorbereiding.", week),
         },
         SessionType::Interval => SessionAdvice {
-            goal: "VO2max verhogen en loopeconomie verbeteren via intensieve herhalingen.".into(),
+            goal: "VO2max verhogen en loopeconomie verbeteren via korte intensieve herhalingen.".into(),
             warmup: "2 km rustig inlopen, dan 4× 100m versnellingsloopje.".into(),
             main_set: format!("5× 1000m op 10k-racetempo. Herstel: 90s rustig joggen. Totaal: {:.1} km.", km),
-            cooldown: "1-2 km rustig uitlopen.".into(),
-            summary: "5 × 1000m op 10k-tempo · 90s herstel".into(),
-            good_signal: "Consistent tempo per herhaling, gecontroleerde ademhaling na herstel.".into(),
+            cooldown: "1.5 km rustig uitlopen.".into(),
+            summary: "5× 1000m op 10k-tempo · 90s herstel".into(),
+            go_signal: "Consistent tempo per herhaling, ademhaling herstelt binnen 90s.".into(),
             stop_signal: "Kniepijn, spierpijn of hartslag blijft > 95% na herstel.".into(),
-            if_too_hard: "Verlaag naar 4 herhalingen of neem 2 min rust.".into(),
-            why_now: "Intervaltraining deze week verhoogt je lactaatdrempel.".into(),
+            too_hard: "Verlaag naar 4 herhalingen of verleng het herstel naar 2 min.".into(),
+            why_now: "Intervaltraining verhoogt je lactaatdrempel en loopeconomie.".into(),
         },
         SessionType::Tempo => SessionAdvice {
-            goal: "Lactaatdrempel omhoog brengen via comfortabele hoge intensiteit.".into(),
-            warmup: "2 km rustig inlopen.".into(),
-            main_set: format!("{:.1} km op tempoloooptempo (Zone 3–4). Stevig maar beheersbaar.", (km - 2.0).max(1.0)),
-            cooldown: "1 km uitlopen.".into(),
-            summary: format!("{:.1} km tempo Zone 3–4", km),
-            good_signal: "Ademhaling stevig maar gecontroleerd, 2-3 woorden per zin mogelijk.".into(),
+            goal: "Lactaatdrempel verhogen via comfortabele hoge intensiteit.".into(),
+            warmup: "2 km rustig inlopen Z1-Z2.".into(),
+            main_set: format!("{:.1} km tempolopen Z3. Stevig maar beheersbaar — 2 woorden per ademhaling mogelijk.", (km - 2.0).max(1.0)),
+            cooldown: "1 km uitlopen Z1.".into(),
+            summary: format!("{:.1} km tempo Z3", km),
+            go_signal: "Ademhaling gecontroleerd, 2-3 woorden per zin mogelijk.".into(),
             stop_signal: "Pijn, of je kunt geen enkel woord meer zeggen.".into(),
-            if_too_hard: "Verlaag naar Zone 3 of verminder met 1 km.".into(),
+            too_hard: "Verlaag naar Z2 of verminder met 1 km.".into(),
             why_now: "Tempolopen verhoogt je comfortabele racetempo.".into(),
         },
         SessionType::Long => SessionAdvice {
             goal: "Uithoudingsvermogen en vetverbranding opbouwen.".into(),
-            warmup: "Eerste 2 km rustig, geleidelijk optempo.".into(),
-            main_set: format!("{:.1} km duurloop op Z2. Neem elke 8-10 km water/voeding.", (km - 2.0).max(1.0)),
+            warmup: "Eerste 2 km rustig Z1, dan geleidelijk naar Z2.".into(),
+            main_set: format!("{:.1} km duurloop Z2. Neem elke 10 km een voedings-/watermoment.", (km - 2.0).max(1.0)),
             cooldown: "Laatste km rustig uitlopen, 10 min stretchen.".into(),
             summary: format!("{:.1} km lange duurloop Z2", km),
-            good_signal: "Na de helft nog steeds goed gevoel en gelijkmatig tempo.".into(),
+            go_signal: "Na de helft nog gelijkmatig tempo en gecontroleerde ademhaling.".into(),
             stop_signal: "Uitputting, hongerklop of spierkramp.".into(),
-            if_too_hard: "Loop 10% minder of wandel de laatste km's.".into(),
-            why_now: "De lange duurloop is de pijler van je week.".into(),
+            too_hard: "Loop 10% minder of wissel in de laatste km's naar wandelen.".into(),
+            why_now: "De lange duurloop is de pijler van je trainingsweek.".into(),
         },
         SessionType::Cross => SessionAdvice {
-            goal: "Aerobe conditie behouden met minder belasting op gewrichten.".into(),
+            goal: "Aerobe conditie behouden met minder belasting op de gewrichten.".into(),
             warmup: "5 min rustig opwarmen.".into(),
-            main_set: "45-60 min fietsen, zwemmen of roeien op Z2. Hartslag < 75% max.".into(),
+            main_set: "45 min fietsen, zwemmen of roeien Z1. Hartslag < 75% max.".into(),
             cooldown: "5 min rustig afkoelen.".into(),
-            summary: "60 min crosstraining Z2".into(),
-            good_signal: "Goed gevoel, geen pijn in getroffenen gebieden.".into(),
+            summary: "45 min crosstraining Z1".into(),
+            go_signal: "Goed gevoel, geen pijn in de belaste gebieden.".into(),
             stop_signal: "Pijn in de geblesseerde zone.".into(),
-            if_too_hard: "Korter of lager tempo.".into(),
+            too_hard: "Korter of op lager tempo.".into(),
             why_now: "Crosstraining houdt de conditie op peil zonder extra loopbelasting.".into(),
         },
         SessionType::Hike => SessionAdvice {
             goal: "Benen versterken en terreinbehendigheid opbouwen.".into(),
-            warmup: "Begin rustig, warm op in de eerste 15 min.".into(),
-            main_set: format!("{:.1} km wandelen of trail-wandelen. Focus op negatieve splits.", km),
+            warmup: "Begin rustig, eerste 15 min als warming-up.".into(),
+            main_set: format!("{:.1} km wandelen of trail. Focus op constante snelheid, ook bergop.", km),
             cooldown: "Laatste 10 min rustig neerlopen.".into(),
-            summary: format!("{:.1} km hike/trail", km),
-            good_signal: "Gelijkmatig tempo, geen overmatige vermoeidheid.".into(),
+            summary: format!("{:.1} km hike/trail Z1-Z2", km),
+            go_signal: "Gelijkmatig tempo, geen overmatige vermoeidheid in benen.".into(),
             stop_signal: "Enkelpijn of extreme spierpijn.".into(),
-            if_too_hard: "Neem meer rustpauzes of korter de route.".into(),
-            why_now: "Hikesessies bouwen kracht en terreinervaring op voor jouw race.".into(),
+            too_hard: "Neem extra rustpauzes of verkort de route.".into(),
+            why_now: "Hikesessies bouwen kracht en terreinervaring voor jouw race.".into(),
         },
         SessionType::Race => SessionAdvice {
             goal: "Maximale prestatie op racedag.".into(),
             warmup: "2 km rustig, dan oplopende intensiteit tot racetempo.".into(),
             main_set: format!("{:.1} km op doeltempo. Eerste 10% conservatief, dan negatieve split.", km),
-            cooldown: "Geniet van het moment! Daarna rustig uitlopen.".into(),
+            cooldown: "Geniet van het moment! Daarna 1 km rustig uitlopen.".into(),
             summary: format!("{:.1} km RACE 🏆", km),
-            good_signal: "Controle in eerste helft, versnelling in tweede helft.".into(),
-            stop_signal: "Ernstige pijn of desorientatie.".into(),
-            if_too_hard: "Zet een realistischer doeltempo.".into(),
+            go_signal: "Controle in eerste helft, versnelling in tweede helft.".into(),
+            stop_signal: "Ernstige pijn of desoriëntatie — stop direct.".into(),
+            too_hard: "Zet een realistischer doeltempo in.".into(),
             why_now: "Dit is waar je al die weken naartoe hebt gewerkt.".into(),
         },
         SessionType::Rest => SessionAdvice {
@@ -214,10 +228,10 @@ fn fallback_advice(session_type: &SessionType, km: f32, week: u8) -> SessionAdvi
             warmup: "Geen opwarming nodig.".into(),
             main_set: "Rust! Eventueel lichte stretching of korte wandeling (< 30 min).".into(),
             cooldown: "Zorg voor goede slaap en hydratatie.".into(),
-            summary: "Rustdag".into(),
-            good_signal: "Goed uitgerust gevoel.".into(),
-            stop_signal: "Forceer geen training.".into(),
-            if_too_hard: "Dit IS de aanpassing.".into(),
+            summary: "Rustdag — herstel is training.".into(),
+            go_signal: "Goed uitgerust gevoel.".into(),
+            stop_signal: "Forceer geen extra training.".into(),
+            too_hard: "Dit IS de aanpassing — rust is de training.".into(),
             why_now: "Rustdagen zijn waar de echte adaptatie plaatsvindt.".into(),
         },
     }
