@@ -151,7 +151,7 @@ pub async fn callback(
     let is_login = matches!(state_val, "login" | "login_web" | "login_admin");
 
     // Login states → find/create user; JWT state → link to existing account
-    let (user_id, email, is_admin) = if is_login {
+    let (user_id, email, is_admin, is_new) = if is_login {
         db::users::find_or_create_by_strava(
             &state.db,
             token_resp.athlete.id,
@@ -161,7 +161,7 @@ pub async fn callback(
         ).await.map_err(AppError::Database)?
     } else {
         let claims = auth::decode_token(state_val, &secret)?;
-        (claims.sub, claims.email, claims.is_admin)
+        (claims.sub, claims.email, claims.is_admin, false)
     };
 
     db::strava::upsert_tokens(
@@ -176,10 +176,9 @@ pub async fn callback(
     .await?;
 
     if !is_login {
-        return Ok(CallbackResponse::Json(Json(serde_json::json!({
-            "connected": true,
-            "athlete_id": token_resp.athlete.id,
-        }))));
+        let app_url = std::env::var("APP_URL")
+            .unwrap_or_else(|_| "https://app.endurunce.nl".into());
+        return Ok(CallbackResponse::Redirect(Redirect::to(&format!("{}/#/profile", app_url))));
     }
 
     let jwt = auth::encode_token(user_id, &email, is_admin, &secret)?;
@@ -192,12 +191,21 @@ pub async fn callback(
         return Ok(CallbackResponse::Redirect(Redirect::to(&url)));
     }
 
-    // Flutter web redirect — use /#/plan?... so GoRouter sees a valid route
+    // Flutter web redirect — store JWT in a short-lived session, redirect with session ID
     if state_val == "login_web" {
         let app_url = std::env::var("APP_URL")
             .unwrap_or_else(|_| "https://app.endurunce.nl".into());
-        let name_param = display_name.as_deref().map(urlencoding::encode).unwrap_or_default();
-        let url = format!("{}/#/plan?token={}&is_admin={}&email={}&display_name={}", app_url, jwt, is_admin, urlencoding::encode(&email), name_param);
+        let session_id = crate::db::oauth_sessions::create(
+            &state.db,
+            &jwt,
+            &email,
+            display_name.as_deref(),
+            is_admin,
+            is_new,
+        )
+        .await
+        .map_err(AppError::Database)?;
+        let url = format!("{}/#/oauth?session={}", app_url, session_id);
         return Ok(CallbackResponse::Redirect(Redirect::to(&url)));
     }
 

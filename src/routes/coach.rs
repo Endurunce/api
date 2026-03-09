@@ -91,6 +91,11 @@ pub async fn send_message(
         Geef motiverende, concrete adviezen in het Nederlands. \
         Spreek de gebruiker aan met je/jij. Max 3 alinea's tenzij anders gevraagd. \
         Baseer je antwoorden op de onderstaande actuele trainingsdata van de gebruiker.\n\n\
+        BELANGRIJK: Voeg aan elk antwoord als allerlaatste regel een disclaimer toe, \
+        gescheiden door een horizontale lijn (---), in dit formaat:\n\
+        ---\n\
+        ⚠️ Ik ben een AI-coach, geen medisch professional. Raadpleeg altijd een arts \
+        bij twijfel over je gezondheid, blessures of pijn.\n\n\
         ## Profiel\n{}\n\n\
         ## Trainingsplan\n{}\n\n\
         ## Blessures\n{}",

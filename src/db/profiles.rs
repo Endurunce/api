@@ -18,7 +18,7 @@ pub async fn upsert(db: &PgPool, profile: &Profile) -> Result<Uuid, sqlx::Error>
             id, user_id, name, date_of_birth, gender,
             running_years, weekly_km, previous_ultra,
             time_10k, time_half_marathon, time_marathon,
-            race_goal, race_date, terrain,
+            race_goal, race_time_goal, race_date, terrain,
             training_days, max_duration_per_day, long_run_day,
             max_hr, rest_hr, hr_zones,
             sleep_hours, complaints, previous_injuries
@@ -26,10 +26,10 @@ pub async fn upsert(db: &PgPool, profile: &Profile) -> Result<Uuid, sqlx::Error>
             $1, $2, $3, $4, $5,
             $6, $7, $8,
             $9, $10, $11,
-            $12, $13, $14,
-            $15, $16, $17,
-            $18, $19, $20,
-            $21, $22, $23
+            $12, $13, $14, $15,
+            $16, $17, $18,
+            $19, $20, $21,
+            $22, $23, $24
         )
         ON CONFLICT (user_id) DO UPDATE SET
             name = EXCLUDED.name,
@@ -42,6 +42,7 @@ pub async fn upsert(db: &PgPool, profile: &Profile) -> Result<Uuid, sqlx::Error>
             time_half_marathon = EXCLUDED.time_half_marathon,
             time_marathon = EXCLUDED.time_marathon,
             race_goal = EXCLUDED.race_goal,
+            race_time_goal = EXCLUDED.race_time_goal,
             race_date = EXCLUDED.race_date,
             terrain = EXCLUDED.terrain,
             training_days = EXCLUDED.training_days,
@@ -68,6 +69,7 @@ pub async fn upsert(db: &PgPool, profile: &Profile) -> Result<Uuid, sqlx::Error>
         profile.time_half_marathon,
         profile.time_marathon,
         race_goal_json,
+        profile.race_time_goal,
         profile.race_date,
         format!("{:?}", profile.terrain).to_lowercase(),
         &training_days,

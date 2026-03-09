@@ -26,6 +26,7 @@ pub struct Profile {
 
     // Race goal
     pub race_goal: RaceGoal,
+    pub race_time_goal: Option<String>,   // tijdsdoelstelling bijv. "3:45:00"
     pub race_date: Option<NaiveDate>,
     pub terrain: Terrain,
 

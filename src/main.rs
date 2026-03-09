@@ -29,7 +29,21 @@ async fn main() {
         .init();
 
     let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
-    let db = db::connect(&database_url).await.expect("Failed to connect to database");
+    let db = {
+        let mut last_err = None;
+        let mut db = None;
+        for attempt in 1..=6 {
+            match db::connect(&database_url).await {
+                Ok(pool) => { db = Some(pool); break; }
+                Err(e) => {
+                    tracing::warn!("Database connection attempt {}/6 failed: {}", attempt, e);
+                    last_err = Some(e);
+                    tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+                }
+            }
+        }
+        db.unwrap_or_else(|| panic!("Failed to connect to database after 6 attempts: {:?}", last_err))
+    };
 
     sqlx::migrate!("./migrations")
         .run(&db)
@@ -50,6 +64,10 @@ async fn main() {
         // Auth — Google OAuth
         .route("/api/auth/google",            get(routes::google::auth_url))
         .route("/api/auth/google/callback",   get(routes::google::callback))
+        // Auth — OAuth session exchange (one-time JWT retrieval)
+        .route("/api/auth/session/:id",       get(routes::oauth_session::get_session))
+        // Test helpers (alleen actief wanneer TEST_MODE=true)
+        .route("/api/test/oauth-session",     post(routes::test_helpers::create_oauth_session))
         // Plans (protected)
         .route("/api/plans/generate", post(routes::plans::generate))
         .route("/api/plans",          get(routes::plans::get_active))

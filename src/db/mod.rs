@@ -1,6 +1,7 @@
 pub mod coach;
 pub mod feedback;
 pub mod injuries;
+pub mod oauth_sessions;
 pub mod plans;
 pub mod profiles;
 pub mod strava;

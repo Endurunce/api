@@ -113,7 +113,7 @@ pub async fn callback(
     let user_info: GoogleUserInfo = user_info_resp.json().await
         .map_err(|e| AppError::Internal(anyhow::anyhow!("Google userinfo parse error: {}", e)))?;
 
-    let (user_id, email, is_admin) = db::users::find_or_create_by_google(
+    let (user_id, email, is_admin, is_new) = db::users::find_or_create_by_google(
         &state.db,
         &user_info.id,
         &user_info.email,
@@ -140,19 +140,21 @@ pub async fn callback(
         return Ok(CallbackResponse::Redirect(Redirect::to(&redirect_url)));
     }
 
-    // Flutter web → redirect to app URL with token in hash — use /#/plan?... so GoRouter sees a valid route
+    // Flutter web → store JWT in a short-lived session, redirect with session ID
     if state_val == "web" {
         let app_url = std::env::var("APP_URL")
             .unwrap_or_else(|_| "https://app.endurunce.nl".into());
-        let name_param = user_info.name.as_deref().map(urlencoding::encode).unwrap_or_default();
-        let redirect_url = format!(
-            "{}/#/plan?token={}&is_admin={}&email={}&display_name={}",
-            app_url,
-            jwt,
+        let session_id = crate::db::oauth_sessions::create(
+            &state.db,
+            &jwt,
+            &email,
+            user_info.name.as_deref(),
             is_admin,
-            urlencoding::encode(&email),
-            name_param,
-        );
+            is_new,
+        )
+        .await
+        .map_err(AppError::Database)?;
+        let redirect_url = format!("{}/#/oauth?session={}", app_url, session_id);
         return Ok(CallbackResponse::Redirect(Redirect::to(&redirect_url)));
     }
 

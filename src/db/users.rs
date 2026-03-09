@@ -67,14 +67,14 @@ pub async fn fetch_is_admin(db: &PgPool, user_id: Uuid) -> Result<bool, sqlx::Er
     Ok(row.map(|(v,)| v).unwrap_or(false))
 }
 
-/// Find user by strava_id, or create one. Returns (id, email, is_admin).
+/// Find user by strava_id, or create one. Returns (id, email, is_admin, is_new).
 pub async fn find_or_create_by_strava(
     db: &PgPool,
     strava_id: i64,
     email: Option<&str>,
     display_name: Option<&str>,
     avatar_url: Option<&str>,
-) -> Result<(Uuid, String, bool), sqlx::Error> {
+) -> Result<(Uuid, String, bool, bool), sqlx::Error> {
     // 1. Find by strava_id
     let existing = sqlx::query_as::<_, (Uuid, String, bool)>(
         "SELECT id, email, is_admin FROM users WHERE strava_id = $1"
@@ -93,7 +93,7 @@ pub async fn find_or_create_by_strava(
         .bind(id)
         .execute(db)
         .await?;
-        return Ok((id, em, is_admin));
+        return Ok((id, em, is_admin, false));
     }
 
     // 2. Find by email (link existing account)
@@ -115,7 +115,7 @@ pub async fn find_or_create_by_strava(
             .bind(id)
             .execute(db)
             .await?;
-            return Ok((id, em, is_admin));
+            return Ok((id, em, is_admin, false));
         }
     }
 
@@ -136,17 +136,17 @@ pub async fn find_or_create_by_strava(
     .fetch_one(db)
     .await?;
 
-    Ok((row.0, placeholder_email, false))
+    Ok((row.0, placeholder_email, false, true))
 }
 
-/// Find user by google_id, or create one. Returns (id, email, is_admin).
+/// Find user by google_id, or create one. Returns (id, email, is_admin, is_new).
 pub async fn find_or_create_by_google(
     db: &PgPool,
     google_id: &str,
     email: &str,
     display_name: Option<&str>,
     avatar_url: Option<&str>,
-) -> Result<(Uuid, String, bool), sqlx::Error> {
+) -> Result<(Uuid, String, bool, bool), sqlx::Error> {
     // 1. Find by google_id
     let existing = sqlx::query_as::<_, (Uuid, String, bool)>(
         "SELECT id, email, is_admin FROM users WHERE google_id = $1"
@@ -164,7 +164,7 @@ pub async fn find_or_create_by_google(
         .bind(id)
         .execute(db)
         .await?;
-        return Ok((id, em, is_admin));
+        return Ok((id, em, is_admin, false));
     }
 
     // 2. Find by email (link existing account)
@@ -185,7 +185,7 @@ pub async fn find_or_create_by_google(
         .bind(id)
         .execute(db)
         .await?;
-        return Ok((id, em, is_admin));
+        return Ok((id, em, is_admin, false));
     }
 
     // 3. Create new user
@@ -202,7 +202,7 @@ pub async fn find_or_create_by_google(
     .fetch_one(db)
     .await?;
 
-    Ok((row.0, email.to_string(), false))
+    Ok((row.0, email.to_string(), false, true))
 }
 
 /// List all users for admin panel
