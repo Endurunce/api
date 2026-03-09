@@ -3,7 +3,7 @@ use uuid::Uuid;
 
 use crate::models::{
     plan::{Day, Phase, Plan, SessionType, Week},
-    profile::{Profile, RaceGoal, Terrain, Weekday},
+    profile::{HrZone, Profile, RaceGoal, Terrain, Weekday},
 };
 
 /// Rotation of non-long session types, depending on goal
@@ -67,9 +67,74 @@ struct PhaseDef {
     base_km: f32,
 }
 
+// ── Session note helpers ───────────────────────────────────────────────────────
+
+fn get_zones(profile: &Profile) -> Option<Vec<HrZone>> {
+    if let Some(zones) = &profile.hr_zones {
+        return Some(zones.clone());
+    }
+    profile.max_hr.map(|mhr| HrZone::calculate(mhr, profile.rest_hr))
+}
+
+fn fmt_zone(zones: Option<&[HrZone]>, n: u8) -> String {
+    if let Some(zs) = zones {
+        if let Some(z) = zs.iter().find(|z| z.num == n) {
+            return format!("Z{} ({}\u{2013}{} bpm)", n, z.lo, z.hi);
+        }
+    }
+    format!("Z{}", n)
+}
+
+fn fmt_zones_range(zones: Option<&[HrZone]>, lo_n: u8, hi_n: u8) -> String {
+    if let Some(zs) = zones {
+        let lo_z = zs.iter().find(|z| z.num == lo_n);
+        let hi_z = zs.iter().find(|z| z.num == hi_n);
+        if let (Some(lz), Some(hz)) = (lo_z, hi_z) {
+            return format!("Z{}\u{2013}Z{} ({}\u{2013}{} bpm)", lo_n, hi_n, lz.lo, hz.hi);
+        }
+    }
+    format!("Z{}\u{2013}Z{}", lo_n, hi_n)
+}
+
+fn session_note(session_type: &SessionType, phase: &Phase, zones: Option<&[HrZone]>) -> Option<String> {
+    let z12 = fmt_zones_range(zones, 1, 2);
+    let z3  = fmt_zone(zones, 3);
+    let z45 = fmt_zones_range(zones, 4, 5);
+    let z4  = fmt_zone(zones, 4);
+
+    let note = match session_type {
+        SessionType::Easy => format!(
+            "Rustige duurloop {z12} \u{2014} praattempo, houd een gesprek vol"
+        ),
+        SessionType::Long => match phase {
+            Phase::BuildOne => format!("Lange duurloop {z12} \u{2014} bouw rustig op, stap terug als het zwaar wordt"),
+            Phase::BuildTwo => format!("Lange duurloop {z12} \u{2014} consequent tempo vasthouden, streef naar negatieve split"),
+            Phase::Peak     => format!("Lange duurloop {z12} \u{2014} simuleer raceomstandigheden op terrein en intensiteit"),
+            Phase::Taper    => format!("Lange duurloop {z12} \u{2014} benen losmaken, fris en herstelgericht"),
+        },
+        SessionType::Tempo => match phase {
+            Phase::BuildOne => format!("Tempolopen \u{2014} 10 min inkomen {z12}, 20 min @ {z3}, 10 min uitlopen {z12}"),
+            Phase::BuildTwo => format!("Tempolopen \u{2014} 10 min inkomen {z12}, 25 min @ {z3}, 10 min uitlopen {z12}"),
+            Phase::Peak     => format!("Tempolopen \u{2014} 10 min inkomen {z12}, 2\u{d7}15 min @ {z3} (5 min herstel), 10 min uitlopen {z12}"),
+            Phase::Taper    => format!("Tempolopen \u{2014} 10 min inkomen {z12}, 15 min @ {z3}, 10 min uitlopen {z12}"),
+        },
+        SessionType::Interval => match phase {
+            Phase::BuildOne => format!("Intervaltraining \u{2014} 10 min inkomen {z12}, 5\u{d7}3 min @ {z45} met 2 min herstelwandeling, 10 min uitlopen"),
+            Phase::BuildTwo => format!("Intervaltraining \u{2014} 10 min inkomen {z12}, 6\u{d7}4 min @ {z45} met 2 min herstelwandeling, 10 min uitlopen"),
+            Phase::Peak     => format!("Intervaltraining \u{2014} 10 min inkomen {z12}, 8\u{d7}4 min @ {z45} met 90 sec herstelwandeling, 10 min uitlopen"),
+            Phase::Taper    => format!("Intervaltraining \u{2014} 10 min inkomen {z12}, 4\u{d7}3 min @ {z4} met 2 min herstelwandeling, 10 min uitlopen"),
+        },
+        SessionType::Hike  => format!("Wandel/trail mix {z12} \u{2014} actief herstel, focus op hoogtemeters en terrein"),
+        SessionType::Cross => "Crosstraining Z1 \u{2014} fietsen, zwemmen of yoga, geen impact, 45\u{2013}60 min".into(),
+        SessionType::Rest | SessionType::Race => return None,
+    };
+    Some(note)
+}
+
 pub fn generate_plan(profile: &Profile) -> Plan {
     let goal = &profile.race_goal;
     let race_km = goal.distance_km();
+    let zones = get_zones(profile);
 
     // ── Number of weeks ──────────────────────────────────────────────────────
     let num_weeks = match profile.race_date {
@@ -186,7 +251,7 @@ pub fn generate_plan(profile: &Profile) -> Plan {
                     target_km: 0.0,
                     adjusted_km: None,
                     completed: false,
-                    notes: None,
+                    notes: session_note(&pattern.session_type, &phase_def.phase, zones.as_deref()),
                     feedback: None,
                     strava_activity_id: None,
                 };
@@ -223,11 +288,11 @@ pub fn generate_plan(profile: &Profile) -> Plan {
 
             Day {
                 weekday: i,
+                notes: session_note(&session_type, &phase_def.phase, zones.as_deref()),
                 session_type,
                 target_km: capped_km.max(3.0),
                 adjusted_km: None,
                 completed: false,
-                notes: None,
                 feedback: None,
                 strava_activity_id: None,
             }
