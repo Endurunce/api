@@ -37,6 +37,13 @@ pub async fn generate(
     let mut profile = req.profile;
     profile.user_id = claims.sub;
 
+    // DPIA leeftijdsverificatie: minimumleeftijd 16 jaar (AVG art. 8)
+    if profile.age_years() < 16 {
+        return Err(AppError::BadRequest(
+            "Je moet minimaal 16 jaar oud zijn om deze app te gebruiken.".into(),
+        ));
+    }
+
     let plan = generate_plan(&profile);
     let profile_id = db::profiles::upsert(&state.db, &profile).await?;
 

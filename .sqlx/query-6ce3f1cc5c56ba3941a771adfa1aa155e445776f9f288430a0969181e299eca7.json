@@ -1,0 +1,46 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM oauth_sessions\n           WHERE id = $1 AND created_at > NOW() - INTERVAL '10 minutes'\n           RETURNING jwt, email, display_name, is_admin, is_new",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "jwt",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "email",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "display_name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "is_admin",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 4,
+        "name": "is_new",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "6ce3f1cc5c56ba3941a771adfa1aa155e445776f9f288430a0969181e299eca7"
+}

@@ -15,7 +15,7 @@ pub async fn upsert(db: &PgPool, profile: &Profile) -> Result<Uuid, sqlx::Error>
     let row = sqlx::query!(
         r#"
         INSERT INTO profiles (
-            id, user_id, name, age, gender,
+            id, user_id, name, date_of_birth, gender,
             running_years, weekly_km, previous_ultra,
             time_10k, time_half_marathon, time_marathon,
             race_goal, race_date, terrain,
@@ -33,7 +33,7 @@ pub async fn upsert(db: &PgPool, profile: &Profile) -> Result<Uuid, sqlx::Error>
         )
         ON CONFLICT (user_id) DO UPDATE SET
             name = EXCLUDED.name,
-            age = EXCLUDED.age,
+            date_of_birth = EXCLUDED.date_of_birth,
             gender = EXCLUDED.gender,
             running_years = EXCLUDED.running_years,
             weekly_km = EXCLUDED.weekly_km,
@@ -59,7 +59,7 @@ pub async fn upsert(db: &PgPool, profile: &Profile) -> Result<Uuid, sqlx::Error>
         profile.id,
         profile.user_id,
         profile.name,
-        profile.age as i16,
+        profile.date_of_birth,
         format!("{:?}", profile.gender).to_lowercase(),
         format!("{:?}", profile.running_years).to_lowercase(),
         profile.weekly_km,
@@ -105,7 +105,7 @@ pub async fn fetch_full_by_user(
     let row = sqlx::query!(
         r#"
         SELECT
-            name, age, gender,
+            name, date_of_birth, gender,
             running_years, weekly_km,
             race_goal, race_date, terrain,
             training_days,
@@ -120,10 +120,17 @@ pub async fn fetch_full_by_user(
     .await?;
 
     Ok(row.map(|r| {
+        use chrono::{Local, Datelike};
+        let today = Local::now().date_naive();
+        let dob = r.date_of_birth;
+        let mut age = today.year() - dob.year();
+        if today.month() < dob.month() || (today.month() == dob.month() && today.day() < dob.day()) {
+            age -= 1;
+        }
         format!(
             "Naam: {}, Leeftijd: {}, Geslacht: {}, Ervaring: {}, Weekkm: {:.0}, Doel: {}, Terrein: {}, Slaap: {}, Klachten: {}",
             r.name,
-            r.age,
+            age,
             r.gender,
             r.running_years,
             r.weekly_km,

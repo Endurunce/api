@@ -13,7 +13,7 @@ pub async fn me(
 ) -> ApiResult<Json<serde_json::Value>> {
     let row = sqlx::query!(
         r#"
-        SELECT name, age, gender, race_goal, race_date, terrain,
+        SELECT name, date_of_birth, gender, race_goal, race_date, terrain,
                weekly_km, running_years
         FROM profiles
         WHERE user_id = $1
@@ -27,7 +27,7 @@ pub async fn me(
     match row {
         Some(r) => Ok(Json(serde_json::json!({
             "name":          r.name,
-            "age":           r.age,
+            "date_of_birth": r.date_of_birth,
             "gender":        r.gender,
             "race_goal":     r.race_goal,
             "race_date":     r.race_date,
@@ -42,7 +42,7 @@ pub async fn me(
 #[derive(serde::Deserialize)]
 pub struct UpdateProfileBody {
     pub name:          Option<String>,
-    pub age:           Option<i16>,
+    pub date_of_birth: Option<chrono::NaiveDate>,
     pub gender:        Option<String>,
     pub weekly_km:     Option<f64>,
     pub running_years: Option<String>,
@@ -58,7 +58,7 @@ pub async fn update_me(
         r#"
         UPDATE profiles SET
             name          = COALESCE($1, name),
-            age           = COALESCE($2, age),
+            date_of_birth = COALESCE($2, date_of_birth),
             gender        = COALESCE($3, gender),
             weekly_km     = COALESCE($4::float4, weekly_km),
             running_years = COALESCE($5, running_years),
@@ -66,7 +66,7 @@ pub async fn update_me(
         WHERE user_id = $6
         "#,
         body.name,
-        body.age,
+        body.date_of_birth,
         body.gender,
         body.weekly_km.map(|v| v as f32),
         body.running_years,

@@ -1,0 +1,44 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO profiles (\n            id, user_id, name, date_of_birth, gender,\n            running_years, weekly_km, previous_ultra,\n            time_10k, time_half_marathon, time_marathon,\n            race_goal, race_date, terrain,\n            training_days, max_duration_per_day, long_run_day,\n            max_hr, rest_hr, hr_zones,\n            sleep_hours, complaints, previous_injuries\n        ) VALUES (\n            $1, $2, $3, $4, $5,\n            $6, $7, $8,\n            $9, $10, $11,\n            $12, $13, $14,\n            $15, $16, $17,\n            $18, $19, $20,\n            $21, $22, $23\n        )\n        ON CONFLICT (user_id) DO UPDATE SET\n            name = EXCLUDED.name,\n            date_of_birth = EXCLUDED.date_of_birth,\n            gender = EXCLUDED.gender,\n            running_years = EXCLUDED.running_years,\n            weekly_km = EXCLUDED.weekly_km,\n            previous_ultra = EXCLUDED.previous_ultra,\n            time_10k = EXCLUDED.time_10k,\n            time_half_marathon = EXCLUDED.time_half_marathon,\n            time_marathon = EXCLUDED.time_marathon,\n            race_goal = EXCLUDED.race_goal,\n            race_date = EXCLUDED.race_date,\n            terrain = EXCLUDED.terrain,\n            training_days = EXCLUDED.training_days,\n            max_duration_per_day = EXCLUDED.max_duration_per_day,\n            long_run_day = EXCLUDED.long_run_day,\n            max_hr = EXCLUDED.max_hr,\n            rest_hr = EXCLUDED.rest_hr,\n            hr_zones = EXCLUDED.hr_zones,\n            sleep_hours = EXCLUDED.sleep_hours,\n            complaints = EXCLUDED.complaints,\n            previous_injuries = EXCLUDED.previous_injuries,\n            updated_at = NOW()\n        RETURNING id\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Date",
+        "Text",
+        "Text",
+        "Float4",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Jsonb",
+        "Date",
+        "Text",
+        "Int2Array",
+        "Jsonb",
+        "Int2",
+        "Int2",
+        "Int2",
+        "Jsonb",
+        "Text",
+        "Text",
+        "TextArray"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "f2d17fa15f015251eea34ba84eced349674b3a8b789d259a1d02890ae8ba09d5"
+}

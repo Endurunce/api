@@ -84,7 +84,7 @@ pub fn generate_plan(profile: &Profile) -> Plan {
 
     // ── Scale factors ────────────────────────────────────────────────────────
     let km_scale = (profile.weekly_km / 55.0).clamp(0.5, 1.8);
-    let age_factor = match profile.age {
+    let age_factor = match profile.age_years() {
         55.. => 0.85,
         50..=54 => 0.89,
         45..=49 => 0.93,

@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE profiles SET\n            name          = COALESCE($1, name),\n            date_of_birth = COALESCE($2, date_of_birth),\n            gender        = COALESCE($3, gender),\n            weekly_km     = COALESCE($4::float4, weekly_km),\n            running_years = COALESCE($5, running_years),\n            updated_at    = NOW()\n        WHERE user_id = $6\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Date",
+        "Text",
+        "Float4",
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "79932806b7a9043bb89cee3d2d427ab873f8ecac21f36b7002a40cbd33747f29"
+}

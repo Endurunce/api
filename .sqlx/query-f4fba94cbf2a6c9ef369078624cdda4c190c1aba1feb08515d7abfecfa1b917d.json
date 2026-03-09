@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT name, age, gender, race_goal, race_date, terrain,\n               weekly_km, running_years\n        FROM profiles\n        WHERE user_id = $1\n        ",
+  "query": "\n        SELECT name, date_of_birth, gender, race_goal, race_date, terrain,\n               weekly_km, running_years\n        FROM profiles\n        WHERE user_id = $1\n        ",
   "describe": {
     "columns": [
       {
@@ -10,8 +10,8 @@
       },
       {
         "ordinal": 1,
-        "name": "age",
-        "type_info": "Int2"
+        "name": "date_of_birth",
+        "type_info": "Date"
       },
       {
         "ordinal": 2,
@@ -60,5 +60,5 @@
       false
     ]
   },
-  "hash": "f56d82e219c1e32637a8917720a5d4fe015545e5186bc3cfd0fd545dd8a15918"
+  "hash": "f4fba94cbf2a6c9ef369078624cdda4c190c1aba1feb08515d7abfecfa1b917d"
 }

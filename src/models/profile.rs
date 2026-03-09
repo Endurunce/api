@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-use chrono::NaiveDate;
+use chrono::{NaiveDate, Local, Datelike};
 
 /// Runner profile — collected during intake flow
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -10,7 +10,8 @@ pub struct Profile {
 
     // Personal
     pub name: String,
-    pub age: u8,
+    /// Geboortedatum verplicht voor DPIA leeftijdsverificatie (minimumleeftijd 16 jaar)
+    pub date_of_birth: NaiveDate,
     pub gender: Gender,
 
     // Experience
@@ -42,6 +43,21 @@ pub struct Profile {
     pub sleep_hours: SleepCategory,
     pub complaints: Option<String>,
     pub previous_injuries: Vec<String>,
+}
+
+impl Profile {
+    /// Berekende leeftijd op basis van date_of_birth.
+    pub fn age_years(&self) -> u8 {
+        let today = Local::now().date_naive();
+        let mut years = today.year() - self.date_of_birth.year();
+        if today.month() < self.date_of_birth.month()
+            || (today.month() == self.date_of_birth.month()
+                && today.day() < self.date_of_birth.day())
+        {
+            years -= 1;
+        }
+        years.max(0).min(255) as u8
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
