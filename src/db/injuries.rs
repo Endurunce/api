@@ -84,3 +84,29 @@ pub struct InjuryRow {
     pub reported_at: NaiveDate,
     pub description: Option<String>,
 }
+
+pub struct InjuryHistoryRow {
+    pub id: Uuid,
+    pub severity: i16,
+    pub can_run: bool,
+    pub recovery_status: String,
+    pub reported_at: NaiveDate,
+    pub resolved_at: Option<NaiveDate>,
+    pub locations: Vec<String>,
+    pub description: Option<String>,
+}
+
+pub async fn fetch_history(db: &PgPool, user_id: Uuid) -> Result<Vec<InjuryHistoryRow>, sqlx::Error> {
+    sqlx::query_as!(
+        InjuryHistoryRow,
+        r#"
+        SELECT id, severity, can_run, recovery_status, reported_at, resolved_at, locations, description
+        FROM injury_reports
+        WHERE user_id = $1
+        ORDER BY reported_at DESC
+        "#,
+        user_id,
+    )
+    .fetch_all(db)
+    .await
+}

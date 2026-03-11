@@ -111,6 +111,39 @@ pub async fn list_injuries(
     Ok(Json(items))
 }
 
+#[derive(Debug, Serialize)]
+pub struct InjuryHistoryItem {
+    pub id: Uuid,
+    pub severity: i16,
+    pub can_run: bool,
+    pub recovery_status: String,
+    pub reported_at: chrono::NaiveDate,
+    pub resolved_at: Option<chrono::NaiveDate>,
+    pub locations: Vec<String>,
+    pub description: Option<String>,
+}
+
+/// GET /api/injuries/history
+pub async fn injury_history(
+    State(state): State<AppState>,
+    claims: Claims,
+) -> ApiResult<Json<Vec<InjuryHistoryItem>>> {
+    let rows = db::injuries::fetch_history(&state.db, claims.sub).await?;
+
+    let items = rows.into_iter().map(|r| InjuryHistoryItem {
+        id: r.id,
+        severity: r.severity,
+        can_run: r.can_run,
+        recovery_status: r.recovery_status,
+        reported_at: r.reported_at,
+        resolved_at: r.resolved_at,
+        locations: r.locations,
+        description: r.description,
+    }).collect();
+
+    Ok(Json(items))
+}
+
 /// PATCH /api/injuries/:id/resolve
 pub async fn resolve_injury(
     State(state): State<AppState>,
