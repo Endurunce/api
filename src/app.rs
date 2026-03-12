@@ -6,7 +6,7 @@ use axum::{
 use http::header;
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
 
-use crate::{routes, AppState};
+use crate::{agent, routes, AppState};
 
 /// Builds the full Axum router. Called from main() and from integration tests.
 pub fn build_router(state: AppState) -> Router {
@@ -81,11 +81,13 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/strava/activities",    get(routes::strava::activities))
         // Profile (protected)
         .route("/api/profiles/me", get(routes::profiles::me).patch(routes::profiles::update_me))
-        // Coach (protected)
+        // Coach (protected) — legacy REST endpoint
         .route(
             "/api/coach",
             get(routes::coach::get_messages).post(routes::coach::send_message),
         )
+        // AI Coach Agent — WebSocket streaming
+        .route("/api/ws", get(agent::streaming::ws_handler))
         // Admin (protected + is_admin)
         .route("/api/admin/stats",             get(routes::admin::stats))
         .route("/api/admin/users",             get(routes::admin::list_users))
