@@ -117,7 +117,7 @@ pub async fn send_message(
         })
         .collect();
 
-    let ai_text = anthropic::complete(Some(&system), messages, 1024)
+    let ai_text = anthropic::complete(&state.http, &state.config, Some(&system), messages, 1024)
         .await
         .unwrap_or_else(|_| "Er is een fout opgetreden. Probeer het opnieuw. 🔄".into());
 
@@ -241,7 +241,7 @@ fn build_injury_context(injuries: &[db::injuries::InjuryRow]) -> String {
     for inj in injuries {
         let can_run = if inj.can_run { "kan hardlopen" } else { "kan niet hardlopen" };
         ctx.push_str(&format!(
-            "  - Ernst {}/5, {}, status: {}, gemeld: {}",
+            "  - Ernst {}/10, {}, status: {}, gemeld: {}",
             inj.severity, can_run, inj.recovery_status, inj.reported_at
         ));
         if let Some(desc) = &inj.description {

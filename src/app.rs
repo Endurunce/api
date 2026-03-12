@@ -1,13 +1,39 @@
 use axum::{
+    extract::DefaultBodyLimit,
     routing::{get, patch, post},
     Router,
 };
+use http::header;
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
 
 use crate::{routes, AppState};
 
 /// Builds the full Axum router. Called from main() and from integration tests.
 pub fn build_router(state: AppState) -> Router {
+    // Build CORS layer from config
+    let cors = {
+        let origins: Vec<http::HeaderValue> = state
+            .config
+            .allowed_origins
+            .iter()
+            .filter_map(|o| o.parse().ok())
+            .collect();
+
+        CorsLayer::new()
+            .allow_origin(origins)
+            .allow_methods([
+                http::Method::GET,
+                http::Method::POST,
+                http::Method::PATCH,
+                http::Method::DELETE,
+                http::Method::OPTIONS,
+            ])
+            .allow_headers([
+                header::CONTENT_TYPE,
+                header::AUTHORIZATION,
+            ])
+    };
+
     Router::new()
         // Health
         .route("/health", get(routes::health::health_check))
@@ -65,7 +91,8 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/admin/users",             get(routes::admin::list_users))
         .route("/api/admin/users/:id/admin",   patch(routes::admin::set_admin))
         .with_state(state)
-        .layer(CorsLayer::permissive())
+        .layer(DefaultBodyLimit::max(1_048_576)) // 1 MB
+        .layer(cors)
         .layer(TraceLayer::new_for_http())
 }
 
@@ -90,7 +117,22 @@ mod tests {
     // ── Test helpers ──────────────────────────────────────────────────────────
 
     fn app(pool: PgPool) -> Router {
-        build_router(AppState { db: pool })
+        let config = crate::config::Config {
+            jwt_secret: "test_secret".into(),
+            database_url: String::new(),
+            strava_client_id: None,
+            strava_client_secret: None,
+            strava_redirect_uri: None,
+            google_client_id: None,
+            google_client_secret: None,
+            google_redirect_uri: None,
+            app_url: "http://localhost:8080".into(),
+            admin_url: "http://localhost:8081".into(),
+            anthropic_api_key: None,
+            anthropic_model: "claude-sonnet-4-6".into(),
+            allowed_origins: vec!["http://localhost:8080".into()],
+        };
+        build_router(AppState { db: pool, config, http: reqwest::Client::new() })
     }
 
     /// POST/PATCH/etc. with a JSON body.

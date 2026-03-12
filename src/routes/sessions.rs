@@ -99,7 +99,7 @@ pub async fn session_advice(
         content: prompt,
     }];
 
-    match anthropic::complete(None, messages, 512).await {
+    match anthropic::complete(&state.http, &state.config, None, messages, 512).await {
         Ok(response) => {
             // Extract JSON from response
             let start = response.find('{').unwrap_or(0);
@@ -108,7 +108,9 @@ pub async fn session_advice(
                 return Ok(Json(advice));
             }
         }
-        Err(_) => {}
+        Err(e) => {
+            tracing::warn!("AI session advice failed: {}", e);
+        }
     }
 
     Ok(Json(fallback_advice(&day.session_type, target_km, week_number)))

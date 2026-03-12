@@ -1,6 +1,8 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
+use crate::config::Config;
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Message {
     pub role: String,
@@ -27,24 +29,25 @@ struct ContentBlock {
 }
 
 pub async fn complete(
+    http: &reqwest::Client,
+    config: &Config,
     system: Option<&str>,
     messages: Vec<Message>,
     max_tokens: u32,
 ) -> Result<String> {
-    let api_key = std::env::var("ANTHROPIC_API_KEY")
-        .map_err(|_| anyhow::anyhow!("ANTHROPIC_API_KEY not set"))?;
+    let api_key = config.anthropic_api_key.as_deref()
+        .ok_or_else(|| anyhow::anyhow!("ANTHROPIC_API_KEY not set"))?;
 
-    let client = reqwest::Client::new();
     let body = AnthropicRequest {
-        model: "claude-sonnet-4-6".to_string(),
+        model: config.anthropic_model.clone(),
         max_tokens,
         system: system.map(String::from),
         messages,
     };
 
-    let resp = client
+    let resp = http
         .post("https://api.anthropic.com/v1/messages")
-        .header("x-api-key", &api_key)
+        .header("x-api-key", api_key)
         .header("anthropic-version", "2023-06-01")
         .json(&body)
         .send()

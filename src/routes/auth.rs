@@ -1,4 +1,5 @@
 use axum::{extract::State, http::StatusCode, Json};
+use email_address::EmailAddress;
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -32,24 +33,26 @@ pub async fn register(
     State(state): State<AppState>,
     Json(req): Json<RegisterRequest>,
 ) -> ApiResult<(StatusCode, Json<AuthResponse>)> {
-    if req.email.is_empty() || !req.email.contains('@') {
+    if !EmailAddress::is_valid(&req.email) {
         return Err(AppError::BadRequest("Invalid email".into()));
     }
     if req.password.len() < 8 {
         return Err(AppError::BadRequest("Password must be at least 8 characters".into()));
     }
 
-    if db::users::exists(&state.db, &req.email).await? {
-        return Err(AppError::BadRequest("Email already registered".into()));
-    }
-
     let hash = bcrypt::hash(&req.password, bcrypt::DEFAULT_COST)
         .map_err(|e| AppError::Internal(anyhow::anyhow!("bcrypt error: {}", e)))?;
 
-    let user_id = db::users::insert(&state.db, &req.email, &hash).await?;
+    // Rely on DB UNIQUE constraint instead of check-then-insert race condition
+    let user_id = match db::users::insert(&state.db, &req.email, &hash).await {
+        Ok(id) => id,
+        Err(sqlx::Error::Database(e)) if e.constraint() == Some("users_email_key") => {
+            return Err(AppError::BadRequest("Email already registered".into()));
+        }
+        Err(e) => return Err(AppError::Database(e)),
+    };
 
-    let secret = std::env::var("JWT_SECRET").unwrap_or_else(|_| "secret".into());
-    let token = auth::encode_token(user_id, &req.email, false, &secret)?;
+    let token = auth::encode_token(user_id, &req.email, false, &state.config.jwt_secret)?;
 
     Ok((StatusCode::CREATED, Json(AuthResponse { token, user_id, email: req.email, is_admin: false })))
 }
@@ -71,8 +74,7 @@ pub async fn login(
 
     let is_admin = db::users::fetch_is_admin(&state.db, user.id).await?;
 
-    let secret = std::env::var("JWT_SECRET").unwrap_or_else(|_| "secret".into());
-    let token = auth::encode_token(user.id, &user.email, is_admin, &secret)?;
+    let token = auth::encode_token(user.id, &user.email, is_admin, &state.config.jwt_secret)?;
 
     Ok(Json(AuthResponse { token, user_id: user.id, email: user.email, is_admin }))
 }
