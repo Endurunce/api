@@ -31,7 +31,7 @@ pub struct AdminClaims(pub Claims);
 
 pub fn encode_token(user_id: Uuid, email: &str, is_admin: bool, secret: &str) -> Result<String, AppError> {
     let now = chrono::Utc::now();
-    let exp = now + chrono::Duration::hours(TOKEN_EXPIRY_HOURS);
+    let exp = now + chrono::TimeDelta::hours(TOKEN_EXPIRY_HOURS);
 
     let claims = Claims {
         sub: user_id,

@@ -15,12 +15,21 @@ pub struct SendMessageRequest {
     pub content: String,
 }
 
-/// GET /api/coach — last 60 messages
+/// Number of recent messages to include as AI context.
+const AI_CONTEXT_MESSAGES: i64 = 20;
+/// Maximum number of messages to store per user (older messages are pruned).
+const MAX_STORED_MESSAGES: i64 = 60;
+
+/// GET /api/coach — returns the last [`MAX_STORED_MESSAGES`] coach messages.
+///
+/// **Auth:** Bearer JWT required.
+///
+/// **Response:** 200 with JSON array of `CoachMessage`.
 pub async fn get_messages(
     State(state): State<AppState>,
     claims: Claims,
 ) -> ApiResult<Json<Vec<db::coach::CoachMessage>>> {
-    let messages = db::coach::fetch_messages(&state.db, claims.sub, 60)
+    let messages = db::coach::fetch_messages(&state.db, claims.sub, MAX_STORED_MESSAGES)
         .await
         .map_err(AppError::Database)?;
     Ok(Json(messages))
@@ -70,7 +79,7 @@ pub async fn send_message(
 
     // Build context — fetch all data in parallel
     let (history, profile_ctx, plan_opt, injuries) = tokio::join!(
-        db::coach::fetch_messages(&state.db, claims.sub, 20),
+        db::coach::fetch_messages(&state.db, claims.sub, AI_CONTEXT_MESSAGES),
         db::profiles::fetch_full_by_user(&state.db, claims.sub),
         db::plans::fetch_active(&state.db, claims.sub),
         db::injuries::fetch_active(&state.db, claims.sub),
@@ -126,8 +135,8 @@ pub async fn send_message(
         .await
         .map_err(AppError::Database)?;
 
-    // Prune old messages (keep 60)
-    db::coach::prune_old_messages(&state.db, claims.sub, 60).await.ok();
+    // Prune old messages
+    db::coach::prune_old_messages(&state.db, claims.sub, MAX_STORED_MESSAGES).await.ok();
 
     Ok(Json(assistant_msg))
 }

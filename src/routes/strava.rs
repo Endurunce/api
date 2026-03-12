@@ -3,8 +3,9 @@ use axum::{
     response::Redirect,
     Json,
 };
-use chrono::{Duration, Utc};
+use chrono::{TimeDelta, Utc};
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 use crate::{
     auth::{self, Claims},
@@ -129,7 +130,7 @@ pub async fn callback(
         .map_err(|e| AppError::Internal(anyhow::anyhow!("Strava response parse error: {}", e)))?;
 
     let expires_at = chrono::DateTime::from_timestamp(token_resp.expires_at, 0)
-        .unwrap_or_else(|| Utc::now() + Duration::hours(6));
+        .unwrap_or_else(|| Utc::now() + TimeDelta::hours(6));
 
     let display_name = match (&token_resp.athlete.firstname, &token_resp.athlete.lastname) {
         (Some(f), Some(l)) => Some(format!("{} {}", f, l)),
@@ -274,7 +275,7 @@ pub async fn exchange_code(
         .map_err(|e| AppError::Internal(anyhow::anyhow!("Strava parse error: {}", e)))?;
 
     let expires_at = chrono::DateTime::from_timestamp(token_resp.expires_at, 0)
-        .unwrap_or_else(|| Utc::now() + Duration::hours(6));
+        .unwrap_or_else(|| Utc::now() + TimeDelta::hours(6));
 
     let display_name = match (&token_resp.athlete.firstname, &token_resp.athlete.lastname) {
         (Some(f), Some(l)) => Some(format!("{} {}", f, l)),
@@ -331,7 +332,17 @@ pub async fn status(
     }
 }
 
-/// GET /api/strava/activities — fetch recent Strava activities
+/// GET /api/strava/activities — fetch recent Strava activities.
+///
+/// Automatically refreshes the Strava access token if it has expired.
+///
+/// **Auth:** Bearer JWT required.
+///
+/// **Query parameters:**
+/// - `per_page` (u32, optional, default 20, max 100)
+/// - `page` (u32, optional, default 1)
+///
+/// **Response:** 200 with Strava activities JSON array.
 pub async fn activities(
     State(state): State<AppState>,
     claims: Claims,
@@ -341,18 +352,15 @@ pub async fn activities(
         .await?
         .ok_or_else(|| AppError::BadRequest("Strava not connected. Visit /api/strava/connect first.".into()))?;
 
-    if tokens.expires_at <= Utc::now() + Duration::minutes(5) {
-        return Err(AppError::BadRequest(
-            "Strava token expired. Please reconnect via /api/strava/connect.".into()
-        ));
-    }
+    // Auto-refresh if token is expired or about to expire
+    let access_token = ensure_fresh_token(&state, claims.sub, &tokens).await?;
 
     let per_page = params.per_page.unwrap_or(20).min(100);
     let page = params.page.unwrap_or(1);
 
     let resp = state.http
         .get("https://www.strava.com/api/v3/athlete/activities")
-        .bearer_auth(&tokens.access_token)
+        .bearer_auth(&access_token)
         .query(&[("per_page", per_page), ("page", page)])
         .send()
         .await
@@ -367,4 +375,90 @@ pub async fn activities(
         .map_err(|e| AppError::Internal(anyhow::anyhow!("Strava parse error: {}", e)))?;
 
     Ok(Json(activities))
+}
+
+// ── Token refresh ─────────────────────────────────────────────────────────────
+
+/// Strava token refresh response.
+#[derive(Debug, Deserialize)]
+struct StravaRefreshResponse {
+    access_token: String,
+    refresh_token: String,
+    expires_at: i64,
+}
+
+/// Ensure the Strava access token is fresh. If it is expired (or within 5 minutes
+/// of expiry), use the stored `refresh_token` to obtain a new `access_token` from
+/// the Strava API and persist the updated tokens in the database.
+///
+/// Returns the valid access token string.
+async fn ensure_fresh_token(
+    state: &AppState,
+    user_id: Uuid,
+    tokens: &db::strava::StravaTokenRow,
+) -> Result<String, AppError> {
+    // Token still valid for > 5 minutes — return as-is
+    if tokens.expires_at > Utc::now() + TimeDelta::minutes(5) {
+        return Ok(tokens.access_token.clone());
+    }
+
+    // Determine which client credentials to use:
+    // 1. User-provided credentials stored alongside their tokens
+    // 2. Server-level credentials from config
+    let (client_id, client_secret) = db::strava::fetch_client_credentials(&state.db, user_id)
+        .await
+        .map_err(AppError::Database)?
+        .map(|(id, secret)| (id, secret))
+        .or_else(|| {
+            let id = state.config.strava_client_id.clone()?;
+            let secret = state.config.strava_client_secret.clone()?;
+            Some((id, secret))
+        })
+        .ok_or_else(|| AppError::Internal(anyhow::anyhow!(
+            "No Strava client credentials available for token refresh"
+        )))?;
+
+    tracing::info!("Refreshing expired Strava token for user {}", user_id);
+
+    let resp = state.http
+        .post("https://www.strava.com/oauth/token")
+        .form(&[
+            ("client_id",     client_id.as_str()),
+            ("client_secret", client_secret.as_str()),
+            ("refresh_token", tokens.refresh_token.as_str()),
+            ("grant_type",    "refresh_token"),
+        ])
+        .send()
+        .await
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("Strava refresh request failed: {}", e)))?;
+
+    if !resp.status().is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        return Err(AppError::Internal(anyhow::anyhow!(
+            "Strava token refresh failed: {}",
+            body
+        )));
+    }
+
+    let refresh: StravaRefreshResponse = resp.json().await
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("Strava refresh parse error: {}", e)))?;
+
+    let new_expires_at = chrono::DateTime::from_timestamp(refresh.expires_at, 0)
+        .unwrap_or_else(|| Utc::now() + TimeDelta::hours(6));
+
+    // Persist new tokens
+    db::strava::upsert_tokens(
+        &state.db,
+        user_id,
+        tokens.athlete_id,
+        &refresh.access_token,
+        &refresh.refresh_token,
+        new_expires_at,
+        "activity:read_all",
+    )
+    .await?;
+
+    tracing::info!("Successfully refreshed Strava token for user {}", user_id);
+
+    Ok(refresh.access_token)
 }
