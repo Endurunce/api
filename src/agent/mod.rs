@@ -9,7 +9,10 @@ use uuid::Uuid;
 
 use crate::config::Config;
 
-/// All possible triggers that can invoke the agent.
+/// All possible triggers that can invoke the coach agent.
+///
+/// Each variant represents a different entry point (chat, injury report,
+/// session feedback, scheduled check-in, or week rollover).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AgentTrigger {
@@ -37,7 +40,10 @@ pub enum AgentTrigger {
     WeekRollover { new_week: u32 },
 }
 
-/// The coach agent — holds config, db pool, http client.
+/// The AI coach agent — orchestrates tool-augmented conversations with Claude.
+///
+/// Holds shared references to the database pool, HTTP client, and application config.
+/// Cloneable and safe to share across tasks.
 #[derive(Clone)]
 pub struct CoachAgent {
     pub db: PgPool,
@@ -46,6 +52,7 @@ pub struct CoachAgent {
 }
 
 impl CoachAgent {
+    /// Create a new coach agent with the given dependencies.
     pub fn new(db: PgPool, config: Config, http: reqwest::Client) -> Self {
         Self { db, config, http }
     }

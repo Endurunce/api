@@ -42,7 +42,14 @@ pub struct InjuryListItem {
     pub description: Option<String>,
 }
 
-/// POST /api/injuries
+/// POST /api/injuries — report a new injury.
+///
+/// **Auth:** Bearer JWT required.
+///
+/// **Request body:** `{ locations: [BodyLocation], severity: 1-10, can_walk: bool, can_run: bool, description?: string }`.
+///
+/// **Response:** 201 with `{ injury_id, plan_adapted: bool, recovery_weeks }`.
+/// If an active plan exists, it is automatically adapted for the injury.
 pub async fn report_injury(
     State(state): State<AppState>,
     claims: Claims,
@@ -92,7 +99,11 @@ pub async fn report_injury(
     Ok((StatusCode::CREATED, Json(ReportInjuryResponse { injury_id, plan_adapted, recovery_weeks })))
 }
 
-/// GET /api/injuries
+/// GET /api/injuries — list all active (unresolved) injuries for the authenticated user.
+///
+/// **Auth:** Bearer JWT required.
+///
+/// **Response:** 200 with JSON array of `InjuryListItem`.
 pub async fn list_injuries(
     State(state): State<AppState>,
     claims: Claims,
@@ -123,7 +134,11 @@ pub struct InjuryHistoryItem {
     pub description: Option<String>,
 }
 
-/// GET /api/injuries/history
+/// GET /api/injuries/history — full injury history including resolved injuries.
+///
+/// **Auth:** Bearer JWT required.
+///
+/// **Response:** 200 with JSON array of `InjuryHistoryItem`.
 pub async fn injury_history(
     State(state): State<AppState>,
     claims: Claims,
@@ -144,7 +159,11 @@ pub async fn injury_history(
     Ok(Json(items))
 }
 
-/// PATCH /api/injuries/:id/resolve
+/// PATCH /api/injuries/:id/resolve — mark an injury as resolved.
+///
+/// **Auth:** Bearer JWT required. Injury must belong to the authenticated user.
+///
+/// **Response:** 204 No Content on success, 404 if not found or already resolved.
 pub async fn resolve_injury(
     State(state): State<AppState>,
     claims: Claims,

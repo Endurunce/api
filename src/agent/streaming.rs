@@ -19,7 +19,16 @@ enum WsInput {
     Message { content: String },
 }
 
-/// GET /api/ws — WebSocket upgrade handler
+/// GET /api/ws — WebSocket upgrade handler for the AI coach agent.
+///
+/// **Auth:** Bearer JWT required (extracted before upgrade).
+///
+/// Upgrades the HTTP connection to a WebSocket, then streams AI responses
+/// (text deltas, tool use events, tool results) back to the client in real-time.
+///
+/// **Client → Server:** `{ "type": "message", "content": "..." }`
+///
+/// **Server → Client:** `StreamEvent` variants (text_delta, tool_use, tool_result, message_end, error).
 pub async fn ws_handler(
     ws: WebSocketUpgrade,
     State(state): State<AppState>,

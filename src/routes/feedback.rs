@@ -28,7 +28,14 @@ pub struct CompleteDayResponse {
     pub ai_advice: Option<AiAdvice>,
 }
 
-/// POST /api/plans/:plan_id/weeks/:week/days/:weekday/complete
+/// POST /api/plans/:plan_id/weeks/:week/days/:weekday/complete — mark a training day as completed.
+///
+/// **Auth:** Bearer JWT required.
+///
+/// **Request body:** `{ feeling: 1-5, pain: bool, notes?: string, actual_km?: f32 }`.
+///
+/// **Response:** 201 with `{ feedback_id, ai_advice? }`. Generates automatic AI advice
+/// when the user reports pain with low feeling scores.
 pub async fn complete_day(
     State(state): State<AppState>,
     claims: Claims,

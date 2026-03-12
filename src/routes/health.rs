@@ -3,6 +3,12 @@ use serde_json::json;
 
 use crate::AppState;
 
+/// GET /health — health check endpoint.
+///
+/// **Auth:** None (public).
+///
+/// **Response:** 200 with `{ status: "ok", service, db }` if healthy,
+/// 503 with `{ status: "degraded" }` if DB is unreachable.
 pub async fn health_check(State(state): State<AppState>) -> impl IntoResponse {
     let db_ok = sqlx::query("SELECT 1").execute(&state.db).await.is_ok();
 

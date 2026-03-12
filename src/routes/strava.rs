@@ -25,7 +25,14 @@ pub struct AuthUrlParams {
     pub state: Option<String>,
 }
 
-/// GET /api/auth/strava?state=login|login_web|login_admin — public, returns OAuth URL for login
+/// GET /api/auth/strava — returns the Strava OAuth authorization URL.
+///
+/// **Auth:** None (public endpoint).
+///
+/// **Query parameters:**
+/// - `state` (string, optional, default `"login"`): one of `login`, `login_web`, `login_admin`.
+///
+/// **Response:** 200 with `{ auth_url: string }`.
 pub async fn auth_url(
     State(state): State<AppState>,
     Query(params): Query<AuthUrlParams>,
@@ -47,7 +54,11 @@ pub async fn auth_url(
     Ok(Json(StravaConnectResponse { auth_url }))
 }
 
-/// GET /api/strava/connect — protected, returns OAuth URL for linking to an existing account
+/// GET /api/strava/connect — returns OAuth URL for linking Strava to an existing account.
+///
+/// **Auth:** Bearer JWT required.
+///
+/// **Response:** 200 with `{ auth_url: string }`.
 pub async fn connect(
     State(state): State<AppState>,
     claims: Claims,
@@ -97,7 +108,17 @@ struct StravaAthlete {
     email: Option<String>,
 }
 
-/// GET /api/strava/callback — handles login (state=login|login_web|login_admin) and account linking (state=JWT)
+/// GET /api/strava/callback — OAuth callback handler.
+///
+/// Handles both login flows (`state=login|login_web|login_admin`) and account
+/// linking (`state=<JWT>`). Exchanges the authorization code for tokens,
+/// creates/finds the user, and redirects or returns JSON.
+///
+/// **Auth:** None (public callback from Strava).
+///
+/// **Query parameters:** `code` (string), `state` (string).
+///
+/// **Response:** JSON with token (mobile) or redirect with OAuth session (web/admin).
 pub async fn callback(
     State(state): State<AppState>,
     Query(params): Query<CallbackParams>,
@@ -239,7 +260,13 @@ pub struct ExchangeCodeResponse {
     pub city: Option<String>,
 }
 
-/// POST /api/strava/exchange-code — user provides own Strava credentials
+/// POST /api/strava/exchange-code — exchange a Strava auth code using user-provided credentials.
+///
+/// **Auth:** Bearer JWT required.
+///
+/// **Request body:** `{ client_id, client_secret, code, redirect_uri? }`.
+///
+/// **Response:** 200 with `{ athlete_id, display_name?, avatar_url?, city? }`.
 pub async fn exchange_code(
     State(state): State<AppState>,
     claims: Claims,
@@ -307,7 +334,11 @@ pub async fn exchange_code(
     }))
 }
 
-/// GET /api/strava/status — check if Strava is connected
+/// GET /api/strava/status — check if the user has a linked Strava account.
+///
+/// **Auth:** Bearer JWT required.
+///
+/// **Response:** 200 with `{ connected: bool, athlete_id?, display_name?, avatar_url? }`.
 pub async fn status(
     State(state): State<AppState>,
     claims: Claims,

@@ -4,6 +4,9 @@ use uuid::Uuid;
 use super::AgentError;
 
 /// Build the full system prompt with user-specific context injected.
+///
+/// Fetches the user's profile, active training plan, and injuries in parallel,
+/// then assembles them into a comprehensive system prompt for the AI coach.
 pub async fn build_system_prompt(db: &PgPool, user_id: Uuid) -> Result<String, AgentError> {
     // Fetch all context in parallel
     let (profile_ctx, plan_ctx, injury_ctx) = tokio::join!(

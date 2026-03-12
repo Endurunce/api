@@ -29,6 +29,15 @@ pub struct AuthResponse {
     pub is_admin: bool,
 }
 
+/// POST /api/auth/register — create a new user account.
+///
+/// **Auth:** None (public endpoint, rate-limited).
+///
+/// **Request body:** `{ "email": string, "password": string }` (min 8 chars).
+///
+/// **Response:** 201 with `AuthResponse { token, user_id, email, is_admin }`.
+///
+/// **Errors:** 400 if email invalid, password too short, or email already registered.
 pub async fn register(
     State(state): State<AppState>,
     Json(req): Json<RegisterRequest>,
@@ -57,6 +66,15 @@ pub async fn register(
     Ok((StatusCode::CREATED, Json(AuthResponse { token, user_id, email: req.email, is_admin: false })))
 }
 
+/// POST /api/auth/login — authenticate with email and password.
+///
+/// **Auth:** None (public endpoint, rate-limited).
+///
+/// **Request body:** `{ "email": string, "password": string }`.
+///
+/// **Response:** 200 with `AuthResponse { token, user_id, email, is_admin }`.
+///
+/// **Errors:** 400 if credentials are invalid.
 pub async fn login(
     State(state): State<AppState>,
     Json(req): Json<LoginRequest>,

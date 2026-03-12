@@ -35,7 +35,17 @@ pub async fn get_messages(
     Ok(Json(messages))
 }
 
-/// POST /api/coach — save user message + get AI response
+/// POST /api/coach — send a message to the AI coach and get a response.
+///
+/// **Auth:** Bearer JWT required.
+///
+/// **Request body:** `{ "content": string }` (max 1000 chars).
+///
+/// **Response:** 200 with `CoachMessage` (the assistant's reply).
+///
+/// **Rate limits:** 20 messages/hour, 100 messages/day per user.
+///
+/// Builds full context (profile, plan, injuries) for the AI, then calls Anthropic.
 pub async fn send_message(
     State(state): State<AppState>,
     claims: Claims,

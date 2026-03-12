@@ -27,7 +27,12 @@ pub struct SessionAdvice {
     pub why_now: String,
 }
 
-/// GET /api/plans/:plan_id/weeks/:week/days/:weekday/advice
+/// GET /api/plans/:plan_id/weeks/:week/days/:weekday/advice — get AI-generated session advice.
+///
+/// **Auth:** Bearer JWT required.
+///
+/// **Response:** 200 with `SessionAdvice { goal, warmup, main_set, cooldown, summary, ... }`.
+/// Falls back to a deterministic template if the AI call fails.
 pub async fn session_advice(
     State(state): State<AppState>,
     claims: Claims,
@@ -116,7 +121,11 @@ pub async fn session_advice(
     Ok(Json(fallback_advice(&day.session_type, target_km, week_number)))
 }
 
-/// POST /api/plans/:plan_id/weeks/:week/days/:weekday/uncomplete
+/// POST /api/plans/:plan_id/weeks/:week/days/:weekday/uncomplete — undo session completion.
+///
+/// **Auth:** Bearer JWT required.
+///
+/// **Response:** 200 with `{ uncompleted: true }`.
 pub async fn uncomplete_day(
     State(state): State<AppState>,
     claims: Claims,
