@@ -160,6 +160,8 @@ pub fn build_router(state: AppState) -> Router {
             "/api/coach",
             get(routes::coach::get_messages).post(routes::coach::send_message),
         )
+        // Conversation history (protected)
+        .route("/api/conversations", get(routes::conversations::list))
         // AI Coach Agent — WebSocket streaming
         .route("/api/ws", get(agent::streaming::ws_handler))
         // Admin (protected + is_admin)
