@@ -12,7 +12,11 @@ use crate::{
     AppState,
 };
 
-/// GET /api/admin/stats — aggregated platform stats
+/// GET /api/admin/stats — aggregated platform statistics.
+///
+/// **Auth:** Bearer JWT with `is_admin=true` required. Returns 403 for non-admins.
+///
+/// **Response:** 200 with stats JSON (user count, plan count, etc.).
 pub async fn stats(
     State(state): State<AppState>,
     _admin: AdminClaims,
@@ -28,7 +32,13 @@ pub struct UsersParams {
     pub q: Option<String>,
 }
 
-/// GET /api/admin/users — paginated user list
+/// GET /api/admin/users — paginated user list with optional search.
+///
+/// **Auth:** Bearer JWT with `is_admin=true` required.
+///
+/// **Query parameters:** `page?`, `per_page?` (max 100), `q?` (search query).
+///
+/// **Response:** 200 with `{ users, total, page, per_page, total_pages }`.
 pub async fn list_users(
     State(state): State<AppState>,
     _admin: AdminClaims,
@@ -58,7 +68,13 @@ pub struct SetAdminRequest {
     pub is_admin: bool,
 }
 
-/// PATCH /api/admin/users/:id/admin — grant or revoke admin status
+/// PATCH /api/admin/users/:id/admin — grant or revoke admin status.
+///
+/// **Auth:** Bearer JWT with `is_admin=true` required. Self-demotion is prevented.
+///
+/// **Request body:** `{ is_admin: bool }`.
+///
+/// **Response:** 200 with `{ user_id, is_admin }`.
 pub async fn set_admin(
     State(state): State<AppState>,
     admin: AdminClaims,

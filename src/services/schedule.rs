@@ -377,7 +377,7 @@ mod tests {
     #[test]
     fn race_date_soon_clamps_to_min_weeks() {
         let mut profile = base_profile(); // Marathon min = 12
-        let soon = chrono::Local::now().date_naive() + chrono::Duration::days(7);
+        let soon = chrono::Local::now().date_naive() + chrono::TimeDelta::days(7);
         profile.race_date = Some(soon);
         let plan = generate_plan(&profile);
         assert_eq!(plan.weeks.len() as u8, RaceGoal::Marathon.min_weeks());
@@ -386,7 +386,7 @@ mod tests {
     #[test]
     fn race_date_far_clamps_to_max_weeks() {
         let mut profile = base_profile(); // Marathon max = 24
-        let far = chrono::Local::now().date_naive() + chrono::Duration::days(365 * 2);
+        let far = chrono::Local::now().date_naive() + chrono::TimeDelta::days(365 * 2);
         profile.race_date = Some(far);
         let plan = generate_plan(&profile);
         assert_eq!(plan.weeks.len() as u8, RaceGoal::Marathon.max_weeks());

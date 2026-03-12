@@ -114,6 +114,25 @@ pub async fn fetch_tokens(
     Ok(row)
 }
 
+/// Fetch user-provided Strava API credentials (client_id, client_secret) if stored.
+/// Returns `None` if the user connected via server-level credentials.
+pub async fn fetch_client_credentials(
+    db: &PgPool,
+    user_id: Uuid,
+) -> Result<Option<(String, String)>, sqlx::Error> {
+    let row = sqlx::query_as::<_, (Option<String>, Option<String>)>(
+        "SELECT strava_client_id, strava_client_secret FROM strava_tokens WHERE user_id = $1",
+    )
+    .bind(user_id)
+    .fetch_optional(db)
+    .await?;
+
+    Ok(row.and_then(|(id, secret)| match (id, secret) {
+        (Some(id), Some(secret)) if !id.is_empty() && !secret.is_empty() => Some((id, secret)),
+        _ => None,
+    }))
+}
+
 /// Fetch athlete display info (display_name, avatar_url) from strava_tokens
 pub async fn fetch_athlete_info(
     db: &PgPool,

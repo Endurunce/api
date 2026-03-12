@@ -1,12 +1,75 @@
 use axum::{
-    extract::DefaultBodyLimit,
+    extract::{ConnectInfo, DefaultBodyLimit},
+    http::{Request, StatusCode},
+    middleware::{self, Next},
+    response::{IntoResponse, Response},
     routing::{get, patch, post},
     Router,
 };
 use http::header;
+use std::collections::HashMap;
+use std::net::IpAddr;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
 
 use crate::{agent, routes, AppState};
+
+// ── Per-IP rate limiter for auth endpoints ────────────────────────────────────
+
+/// Maximum number of auth attempts per IP per window.
+const AUTH_RATE_LIMIT: u32 = 5;
+/// Rate limit window duration in seconds (1 minute).
+const AUTH_RATE_WINDOW_SECS: u64 = 60;
+
+/// Shared state for auth rate limiting: maps IP → (attempt count, window start).
+type RateLimitState = Arc<Mutex<HashMap<IpAddr, (u32, std::time::Instant)>>>;
+
+/// Middleware that enforces per-IP rate limiting on auth endpoints.
+/// Allows [`AUTH_RATE_LIMIT`] requests per [`AUTH_RATE_WINDOW_SECS`] per IP.
+async fn auth_rate_limit(
+    rate_state: RateLimitState,
+    req: Request<axum::body::Body>,
+    next: Next,
+) -> Response {
+    // Extract client IP from X-Forwarded-For (reverse proxy) or peer address
+    let ip = req
+        .headers()
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.split(',').next())
+        .and_then(|s| s.trim().parse::<IpAddr>().ok())
+        .or_else(|| {
+            req.extensions()
+                .get::<ConnectInfo<std::net::SocketAddr>>()
+                .map(|ci| ci.0.ip())
+        })
+        .unwrap_or(IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED));
+
+    let now = std::time::Instant::now();
+    {
+        let mut map = rate_state.lock().await;
+        let entry = map.entry(ip).or_insert((0, now));
+
+        // Reset window if expired
+        if now.duration_since(entry.1).as_secs() >= AUTH_RATE_WINDOW_SECS {
+            *entry = (0, now);
+        }
+
+        entry.0 += 1;
+        if entry.0 > AUTH_RATE_LIMIT {
+            return (
+                StatusCode::TOO_MANY_REQUESTS,
+                axum::Json(serde_json::json!({
+                    "error": "Too many attempts. Try again in a minute."
+                })),
+            )
+                .into_response();
+        }
+    }
+
+    next.run(req).await
+}
 
 /// Builds the full Axum router. Called from main() and from integration tests.
 pub fn build_router(state: AppState) -> Router {
@@ -34,12 +97,25 @@ pub fn build_router(state: AppState) -> Router {
             ])
     };
 
-    Router::new()
-        // Health
-        .route("/health", get(routes::health::health_check))
-        // Auth — email/password
+    // Auth rate limiter shared state
+    let rate_limit: RateLimitState = Arc::new(Mutex::new(HashMap::new()));
+    let rl = rate_limit.clone();
+
+    // Auth routes with per-IP rate limiting
+    let auth_routes = Router::new()
         .route("/api/auth/register", post(routes::auth::register))
         .route("/api/auth/login",    post(routes::auth::login))
+        .layer(middleware::from_fn(move |req, next| {
+            let rl = rl.clone();
+            auth_rate_limit(rl, req, next)
+        }))
+        .with_state(state.clone());
+
+    let mut router = Router::new()
+        // Health
+        .route("/health", get(routes::health::health_check))
+        // Auth — email/password (rate limited)
+        .merge(auth_routes)
         // Auth — Strava OAuth
         .route("/api/auth/strava",          get(routes::strava::auth_url))
         .route("/api/strava/callback",      get(routes::strava::callback))
@@ -48,8 +124,6 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/auth/google/callback", get(routes::google::callback))
         // Auth — OAuth session exchange
         .route("/api/auth/session/:id",     get(routes::oauth_session::get_session))
-        // Test helpers (only active when TEST_MODE=true)
-        .route("/api/test/oauth-session",   post(routes::test_helpers::create_oauth_session))
         // Plans (protected)
         .route("/api/plans/generate", post(routes::plans::generate))
         .route("/api/plans",          get(routes::plans::get_active))
@@ -91,7 +165,17 @@ pub fn build_router(state: AppState) -> Router {
         // Admin (protected + is_admin)
         .route("/api/admin/stats",             get(routes::admin::stats))
         .route("/api/admin/users",             get(routes::admin::list_users))
-        .route("/api/admin/users/:id/admin",   patch(routes::admin::set_admin))
+        .route("/api/admin/users/:id/admin",   patch(routes::admin::set_admin));
+
+    // Test helpers — only registered when TEST_MODE=true (checked at router build time)
+    if std::env::var("TEST_MODE").ok().as_deref() == Some("true") {
+        router = router.route(
+            "/api/test/oauth-session",
+            post(routes::test_helpers::create_oauth_session),
+        );
+    }
+
+    router
         .with_state(state)
         .layer(DefaultBodyLimit::max(1_048_576)) // 1 MB
         .layer(cors)

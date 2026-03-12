@@ -10,7 +10,9 @@ pub struct ConversationMessage {
     pub content: Value,
 }
 
-/// Load the last N messages for a user from the conversations table.
+/// Load the last `limit` messages for a user from the `conversations` table.
+///
+/// Returns messages in chronological order (oldest first).
 pub async fn load_history(
     db: &PgPool,
     user_id: Uuid,
@@ -38,7 +40,9 @@ pub async fn load_history(
         .collect())
 }
 
-/// Save a message to the conversations table.
+/// Save a message (user or assistant) to the `conversations` table.
+///
+/// Returns the UUID of the newly created row.
 pub async fn save_message(
     db: &PgPool,
     user_id: Uuid,
@@ -61,7 +65,9 @@ pub async fn save_message(
     Ok(id)
 }
 
-/// Log an agent event for auditing.
+/// Log an agent event to the `agent_events` table for auditing and analytics.
+///
+/// Records the trigger type, which tools were used, and the response latency.
 pub async fn log_agent_event(
     db: &PgPool,
     user_id: Uuid,
@@ -86,7 +92,9 @@ pub async fn log_agent_event(
     Ok(id)
 }
 
-/// Prune old messages, keeping the most recent `keep` messages per user.
+/// Prune old messages, keeping only the most recent `keep` messages per user.
+///
+/// Prevents unbounded growth of the conversations table.
 pub async fn prune_old_messages(
     db: &PgPool,
     user_id: Uuid,

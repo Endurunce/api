@@ -1,5 +1,7 @@
-/// Centralized configuration loaded once at startup.
-/// Panics if required env vars are missing.
+/// Centralized application configuration loaded once at startup from environment variables.
+///
+/// Required variables (`JWT_SECRET`, `DATABASE_URL`) cause a panic if missing.
+/// All other variables are optional or have sensible defaults.
 #[derive(Clone)]
 pub struct Config {
     pub jwt_secret: String,

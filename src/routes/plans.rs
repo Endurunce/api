@@ -27,7 +27,13 @@ pub struct GeneratePlanResponse {
     pub plan: crate::models::plan::Plan,
 }
 
-/// POST /api/plans/generate — protected, user_id comes from JWT
+/// POST /api/plans/generate — generate a new personalized training plan.
+///
+/// **Auth:** Bearer JWT required. User must be ≥ 16 years old.
+///
+/// **Request body:** `{ "profile": Profile }` with race goal, training days, etc.
+///
+/// **Response:** 201 with `{ plan_id, num_weeks, plan }`. Deactivates any previous plan.
 pub async fn generate(
     State(state): State<AppState>,
     claims: Claims,
@@ -61,7 +67,11 @@ pub async fn generate(
     Ok((StatusCode::CREATED, Json(GeneratePlanResponse { plan_id: plan.id, num_weeks, plan })))
 }
 
-/// GET /api/plans — returns the authenticated user's active plan
+/// GET /api/plans — returns the authenticated user's active training plan.
+///
+/// **Auth:** Bearer JWT required.
+///
+/// **Response:** 200 with the full `Plan` JSON, or 404 if no active plan exists.
 pub async fn get_active(
     State(state): State<AppState>,
     claims: Claims,
@@ -72,7 +82,11 @@ pub async fn get_active(
         .ok_or_else(|| AppError::NotFound("No active plan found".into()))
 }
 
-/// GET /api/plans/:plan_id — returns a specific plan (must belong to the authenticated user)
+/// GET /api/plans/:plan_id — returns a specific plan by ID (scoped to the authenticated user).
+///
+/// **Auth:** Bearer JWT required. Returns 404 if the plan belongs to another user.
+///
+/// **Response:** 200 with the full `Plan` JSON.
 pub async fn get_by_id(
     State(state): State<AppState>,
     claims: Claims,

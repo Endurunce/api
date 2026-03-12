@@ -4,7 +4,10 @@ use uuid::Uuid;
 
 use super::AgentError;
 
-/// Return the tool definitions for the Anthropic API.
+/// Return the tool definitions for the Anthropic Messages API.
+///
+/// These tools allow the coach agent to read user data (profile, plan, injuries)
+/// and modify training plans (update weeks, set rest days, adjust intensity).
 pub fn tool_definitions() -> Vec<Value> {
     vec![
         json!({
@@ -215,7 +218,10 @@ pub fn tool_definitions() -> Vec<Value> {
     ]
 }
 
-/// Execute a tool call and return the result as JSON.
+/// Execute a tool call by name and return the result as JSON.
+///
+/// Dispatches to the appropriate tool implementation based on `tool_name`.
+/// Returns `AgentError::Tool` for unknown tool names.
 pub async fn execute_tool(
     db: &PgPool,
     user_id: Uuid,

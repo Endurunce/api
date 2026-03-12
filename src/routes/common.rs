@@ -1,6 +1,6 @@
 use axum::{response::Redirect, Json};
 
-/// Shared response type for OAuth callbacks that may return JSON or a redirect.
+/// Shared response type for OAuth callbacks that may return JSON (mobile) or a redirect (web/admin).
 pub enum CallbackResponse {
     Json(Json<serde_json::Value>),
     Redirect(Redirect),

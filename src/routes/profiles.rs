@@ -7,7 +7,12 @@ use crate::{
     AppState,
 };
 
-/// GET /api/profiles/me — returns the authenticated user's profile
+/// GET /api/profiles/me — returns the authenticated user's profile.
+///
+/// **Auth:** Bearer JWT required.
+///
+/// **Response:** 200 with profile JSON, or `null` if no profile exists yet
+/// (profile is created when a plan is generated).
 pub async fn me(
     State(state): State<AppState>,
     claims: Claims,
@@ -31,7 +36,13 @@ pub struct UpdateProfileBody {
     pub running_years: Option<String>,
 }
 
-/// PATCH /api/profiles/me — update editable personal fields
+/// PATCH /api/profiles/me — update editable personal fields.
+///
+/// **Auth:** Bearer JWT required.
+///
+/// **Request body:** `{ name?, date_of_birth?, gender?, weekly_km?, running_years? }` (all optional).
+///
+/// **Response:** 204 No Content.
 pub async fn update_me(
     State(state): State<AppState>,
     claims: Claims,
