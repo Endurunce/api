@@ -10,6 +10,7 @@ use crate::{
     auth::{self, Claims},
     db,
     errors::{AppError, ApiResult},
+    routes::common::CallbackResponse,
     AppState,
 };
 
@@ -24,18 +25,21 @@ pub struct AuthUrlParams {
 }
 
 /// GET /api/auth/strava?state=login|login_web|login_admin — public, returns OAuth URL for login
-pub async fn auth_url(Query(params): Query<AuthUrlParams>) -> ApiResult<Json<StravaConnectResponse>> {
-    let client_id = std::env::var("STRAVA_CLIENT_ID")
-        .map_err(|_| AppError::Internal(anyhow::anyhow!("STRAVA_CLIENT_ID not set")))?;
-    let redirect_uri = std::env::var("STRAVA_REDIRECT_URI")
-        .map_err(|_| AppError::Internal(anyhow::anyhow!("STRAVA_REDIRECT_URI not set")))?;
+pub async fn auth_url(
+    State(state): State<AppState>,
+    Query(params): Query<AuthUrlParams>,
+) -> ApiResult<Json<StravaConnectResponse>> {
+    let client_id = state.config.strava_client_id.as_deref()
+        .ok_or_else(|| AppError::Internal(anyhow::anyhow!("STRAVA_CLIENT_ID not set")))?;
+    let redirect_uri = state.config.strava_redirect_uri.as_deref()
+        .ok_or_else(|| AppError::Internal(anyhow::anyhow!("STRAVA_REDIRECT_URI not set")))?;
 
     let state_val = params.state.unwrap_or_else(|| "login".into());
 
     let auth_url = format!(
         "https://www.strava.com/oauth/authorize?client_id={}&redirect_uri={}&response_type=code&approval_prompt=auto&scope=activity:read_all&state={}",
         client_id,
-        urlencoding::encode(&redirect_uri),
+        urlencoding::encode(redirect_uri),
         urlencoding::encode(&state_val),
     );
 
@@ -43,20 +47,22 @@ pub async fn auth_url(Query(params): Query<AuthUrlParams>) -> ApiResult<Json<Str
 }
 
 /// GET /api/strava/connect — protected, returns OAuth URL for linking to an existing account
-pub async fn connect(claims: Claims) -> ApiResult<Json<StravaConnectResponse>> {
-    let client_id = std::env::var("STRAVA_CLIENT_ID")
-        .map_err(|_| AppError::Internal(anyhow::anyhow!("STRAVA_CLIENT_ID not set")))?;
-    let redirect_uri = std::env::var("STRAVA_REDIRECT_URI")
-        .map_err(|_| AppError::Internal(anyhow::anyhow!("STRAVA_REDIRECT_URI not set")))?;
+pub async fn connect(
+    State(state): State<AppState>,
+    claims: Claims,
+) -> ApiResult<Json<StravaConnectResponse>> {
+    let client_id = state.config.strava_client_id.as_deref()
+        .ok_or_else(|| AppError::Internal(anyhow::anyhow!("STRAVA_CLIENT_ID not set")))?;
+    let redirect_uri = state.config.strava_redirect_uri.as_deref()
+        .ok_or_else(|| AppError::Internal(anyhow::anyhow!("STRAVA_REDIRECT_URI not set")))?;
 
     // Encode user_id in state so callback can link the account
-    let secret = std::env::var("JWT_SECRET").unwrap_or_else(|_| "secret".into());
-    let state_token = auth::encode_token(claims.sub, &claims.email, claims.is_admin, &secret)?;
+    let state_token = auth::encode_token(claims.sub, &claims.email, claims.is_admin, &state.config.jwt_secret)?;
 
     let auth_url = format!(
         "https://www.strava.com/oauth/authorize?client_id={}&redirect_uri={}&response_type=code&approval_prompt=auto&scope=activity:read_all&state={}",
         client_id,
-        urlencoding::encode(&redirect_uri),
+        urlencoding::encode(redirect_uri),
         state_token,
     );
 
@@ -90,37 +96,22 @@ struct StravaAthlete {
     email: Option<String>,
 }
 
-pub enum CallbackResponse {
-    Json(Json<serde_json::Value>),
-    Redirect(Redirect),
-}
-
-impl axum::response::IntoResponse for CallbackResponse {
-    fn into_response(self) -> axum::response::Response {
-        match self {
-            CallbackResponse::Json(j) => j.into_response(),
-            CallbackResponse::Redirect(r) => r.into_response(),
-        }
-    }
-}
-
 /// GET /api/strava/callback — handles login (state=login|login_web|login_admin) and account linking (state=JWT)
 pub async fn callback(
     State(state): State<AppState>,
     Query(params): Query<CallbackParams>,
 ) -> Result<CallbackResponse, AppError> {
-    let client_id = std::env::var("STRAVA_CLIENT_ID")
-        .map_err(|_| AppError::Internal(anyhow::anyhow!("STRAVA_CLIENT_ID not set")))?;
-    let client_secret = std::env::var("STRAVA_CLIENT_SECRET")
-        .map_err(|_| AppError::Internal(anyhow::anyhow!("STRAVA_CLIENT_SECRET not set")))?;
+    let client_id = state.config.strava_client_id.as_deref()
+        .ok_or_else(|| AppError::Internal(anyhow::anyhow!("STRAVA_CLIENT_ID not set")))?;
+    let client_secret = state.config.strava_client_secret.as_deref()
+        .ok_or_else(|| AppError::Internal(anyhow::anyhow!("STRAVA_CLIENT_SECRET not set")))?;
 
     // Exchange code for tokens
-    let client = reqwest::Client::new();
-    let resp = client
+    let resp = state.http
         .post("https://www.strava.com/oauth/token")
         .form(&[
-            ("client_id",     client_id.as_str()),
-            ("client_secret", client_secret.as_str()),
+            ("client_id",     client_id),
+            ("client_secret", client_secret),
             ("code",          params.code.as_str()),
             ("grant_type",    "authorization_code"),
         ])
@@ -146,7 +137,6 @@ pub async fn callback(
         _                  => None,
     };
 
-    let secret = std::env::var("JWT_SECRET").unwrap_or_else(|_| "secret".into());
     let state_val = params.state.as_str();
     let is_login = matches!(state_val, "login" | "login_web" | "login_admin");
 
@@ -160,7 +150,7 @@ pub async fn callback(
             token_resp.athlete.profile.as_deref(),
         ).await.map_err(AppError::Database)?
     } else {
-        let claims = auth::decode_token(state_val, &secret)?;
+        let claims = auth::decode_token(state_val, &state.config.jwt_secret)?;
         (claims.sub, claims.email, claims.is_admin, false)
     };
 
@@ -176,25 +166,13 @@ pub async fn callback(
     .await?;
 
     if !is_login {
-        let app_url = std::env::var("APP_URL")
-            .unwrap_or_else(|_| "https://app.endurunce.nl".into());
-        return Ok(CallbackResponse::Redirect(Redirect::to(&format!("{}/#/profile", app_url))));
+        return Ok(CallbackResponse::Redirect(Redirect::to(&format!("{}/#/profile", state.config.app_url))));
     }
 
-    let jwt = auth::encode_token(user_id, &email, is_admin, &secret)?;
+    let jwt = auth::encode_token(user_id, &email, is_admin, &state.config.jwt_secret)?;
 
-    // Admin panel redirect
+    // Admin panel redirect — use OAuth session pattern (no token in URL)
     if state_val == "login_admin" {
-        let admin_url = std::env::var("ADMIN_URL")
-            .unwrap_or_else(|_| "https://admin.endurunce.nl".into());
-        let url = format!("{}/#token={}&is_admin={}&email={}", admin_url, jwt, is_admin, urlencoding::encode(&email));
-        return Ok(CallbackResponse::Redirect(Redirect::to(&url)));
-    }
-
-    // Flutter web redirect — store JWT in a short-lived session, redirect with session ID
-    if state_val == "login_web" {
-        let app_url = std::env::var("APP_URL")
-            .unwrap_or_else(|_| "https://app.endurunce.nl".into());
         let session_id = crate::db::oauth_sessions::create(
             &state.db,
             &jwt,
@@ -205,7 +183,23 @@ pub async fn callback(
         )
         .await
         .map_err(AppError::Database)?;
-        let url = format!("{}/#/oauth?session={}", app_url, session_id);
+        let url = format!("{}/#/oauth?session={}", state.config.admin_url, session_id);
+        return Ok(CallbackResponse::Redirect(Redirect::to(&url)));
+    }
+
+    // Flutter web redirect — store JWT in a short-lived session, redirect with session ID
+    if state_val == "login_web" {
+        let session_id = crate::db::oauth_sessions::create(
+            &state.db,
+            &jwt,
+            &email,
+            display_name.as_deref(),
+            is_admin,
+            is_new,
+        )
+        .await
+        .map_err(AppError::Database)?;
+        let url = format!("{}/#/oauth?session={}", state.config.app_url, session_id);
         return Ok(CallbackResponse::Redirect(Redirect::to(&url)));
     }
 
@@ -250,7 +244,6 @@ pub async fn exchange_code(
     claims: Claims,
     Json(req): Json<ExchangeCodeRequest>,
 ) -> ApiResult<Json<ExchangeCodeResponse>> {
-    let client = reqwest::Client::new();
     let mut form = vec![
         ("client_id",     req.client_id.as_str()),
         ("client_secret", req.client_secret.as_str()),
@@ -263,7 +256,7 @@ pub async fn exchange_code(
         form.push(("redirect_uri", redirect_uri_owned.as_str()));
     }
 
-    let resp = client
+    let resp = state.http
         .post("https://www.strava.com/oauth/token")
         .form(&form)
         .send()
@@ -290,36 +283,20 @@ pub async fn exchange_code(
     };
 
     // Store token with user's own credentials
-    sqlx::query!(
-        r#"
-        INSERT INTO strava_tokens (user_id, athlete_id, access_token, refresh_token, expires_at, scope, strava_client_id, strava_client_secret, display_name, avatar_url)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-        ON CONFLICT (user_id) DO UPDATE SET
-            athlete_id          = EXCLUDED.athlete_id,
-            access_token        = EXCLUDED.access_token,
-            refresh_token       = EXCLUDED.refresh_token,
-            expires_at          = EXCLUDED.expires_at,
-            scope               = EXCLUDED.scope,
-            strava_client_id    = EXCLUDED.strava_client_id,
-            strava_client_secret= EXCLUDED.strava_client_secret,
-            display_name        = EXCLUDED.display_name,
-            avatar_url          = EXCLUDED.avatar_url,
-            updated_at          = NOW()
-        "#,
+    db::strava::upsert_tokens_with_credentials(
+        &state.db,
         claims.sub,
         token_resp.athlete.id,
-        token_resp.access_token,
-        token_resp.refresh_token,
+        &token_resp.access_token,
+        &token_resp.refresh_token,
         expires_at,
         "activity:read_all",
-        req.client_id,
-        req.client_secret,
-        display_name,
-        token_resp.athlete.profile,
+        &req.client_id,
+        &req.client_secret,
+        display_name.as_deref(),
+        token_resp.athlete.profile.as_deref(),
     )
-    .execute(&state.db)
-    .await
-    .map_err(AppError::Database)?;
+    .await?;
 
     Ok(Json(ExchangeCodeResponse {
         athlete_id: token_resp.athlete.id,
@@ -339,20 +316,15 @@ pub async fn status(
         .map_err(AppError::Database)?;
 
     if let Some(t) = tokens {
-        // Fetch athlete info from strava_tokens display_name/avatar_url
-        let row = sqlx::query!(
-            "SELECT display_name, avatar_url, athlete_id FROM strava_tokens WHERE user_id = $1",
-            claims.sub,
-        )
-        .fetch_optional(&state.db)
-        .await
-        .map_err(AppError::Database)?;
+        let info = db::strava::fetch_athlete_info(&state.db, claims.sub)
+            .await
+            .map_err(AppError::Database)?;
 
         Ok(Json(serde_json::json!({
             "connected": true,
             "athlete_id": t.athlete_id,
-            "display_name": row.as_ref().and_then(|r| r.display_name.clone()),
-            "avatar_url": row.as_ref().and_then(|r| r.avatar_url.clone()),
+            "display_name": info.as_ref().and_then(|r| r.display_name.clone()),
+            "avatar_url": info.as_ref().and_then(|r| r.avatar_url.clone()),
         })))
     } else {
         Ok(Json(serde_json::json!({ "connected": false })))
@@ -378,8 +350,7 @@ pub async fn activities(
     let per_page = params.per_page.unwrap_or(20).min(100);
     let page = params.page.unwrap_or(1);
 
-    let client = reqwest::Client::new();
-    let resp = client
+    let resp = state.http
         .get("https://www.strava.com/api/v3/athlete/activities")
         .bearer_auth(&tokens.access_token)
         .query(&[("per_page", per_page), ("page", page)])

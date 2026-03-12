@@ -9,6 +9,7 @@ use crate::{
     auth,
     db,
     errors::{AppError, ApiResult},
+    routes::common::CallbackResponse,
     AppState,
 };
 
@@ -18,18 +19,21 @@ pub struct AuthUrlParams {
 }
 
 /// GET /api/auth/google?state=admin — public, returns the Google OAuth URL
-pub async fn auth_url(Query(params): Query<AuthUrlParams>) -> ApiResult<Json<serde_json::Value>> {
-    let client_id = std::env::var("GOOGLE_CLIENT_ID")
-        .map_err(|_| AppError::Internal(anyhow::anyhow!("GOOGLE_CLIENT_ID not set")))?;
-    let redirect_uri = std::env::var("GOOGLE_REDIRECT_URI")
-        .map_err(|_| AppError::Internal(anyhow::anyhow!("GOOGLE_REDIRECT_URI not set")))?;
+pub async fn auth_url(
+    State(state): State<AppState>,
+    Query(params): Query<AuthUrlParams>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let client_id = state.config.google_client_id.as_deref()
+        .ok_or_else(|| AppError::Internal(anyhow::anyhow!("GOOGLE_CLIENT_ID not set")))?;
+    let redirect_uri = state.config.google_redirect_uri.as_deref()
+        .ok_or_else(|| AppError::Internal(anyhow::anyhow!("GOOGLE_REDIRECT_URI not set")))?;
 
     let state_param = params.state.unwrap_or_else(|| "app".into());
 
     let auth_url = format!(
         "https://accounts.google.com/o/oauth2/v2/auth?client_id={}&redirect_uri={}&response_type=code&scope=openid+email+profile&access_type=offline&prompt=consent&state={}",
         client_id,
-        urlencoding::encode(&redirect_uri),
+        urlencoding::encode(redirect_uri),
         urlencoding::encode(&state_param),
     );
 
@@ -60,30 +64,27 @@ struct GoogleUserInfo {
 }
 
 /// GET /api/auth/google/callback?code=...&state=... — public
-/// If state == "admin", redirects to admin panel with token in URL fragment.
-/// Otherwise returns JSON for the app.
+/// Uses OAuth session pattern for all redirects (no tokens in URLs).
 pub async fn callback(
     State(state): State<AppState>,
     Query(params): Query<CallbackParams>,
 ) -> Result<CallbackResponse, AppError> {
-    let client_id = std::env::var("GOOGLE_CLIENT_ID")
-        .map_err(|_| AppError::Internal(anyhow::anyhow!("GOOGLE_CLIENT_ID not set")))?;
-    let client_secret = std::env::var("GOOGLE_CLIENT_SECRET")
-        .map_err(|_| AppError::Internal(anyhow::anyhow!("GOOGLE_CLIENT_SECRET not set")))?;
-    let redirect_uri = std::env::var("GOOGLE_REDIRECT_URI")
-        .map_err(|_| AppError::Internal(anyhow::anyhow!("GOOGLE_REDIRECT_URI not set")))?;
-
-    let client = reqwest::Client::new();
+    let client_id = state.config.google_client_id.as_deref()
+        .ok_or_else(|| AppError::Internal(anyhow::anyhow!("GOOGLE_CLIENT_ID not set")))?;
+    let client_secret = state.config.google_client_secret.as_deref()
+        .ok_or_else(|| AppError::Internal(anyhow::anyhow!("GOOGLE_CLIENT_SECRET not set")))?;
+    let redirect_uri = state.config.google_redirect_uri.as_deref()
+        .ok_or_else(|| AppError::Internal(anyhow::anyhow!("GOOGLE_REDIRECT_URI not set")))?;
 
     // Exchange code for access token
-    let token_resp = client
+    let token_resp = state.http
         .post("https://oauth2.googleapis.com/token")
         .form(&[
-            ("client_id",     client_id.as_str()),
-            ("client_secret", client_secret.as_str()),
+            ("client_id",     client_id),
+            ("client_secret", client_secret),
             ("code",          params.code.as_str()),
             ("grant_type",    "authorization_code"),
-            ("redirect_uri",  redirect_uri.as_str()),
+            ("redirect_uri",  redirect_uri),
         ])
         .send()
         .await
@@ -98,7 +99,7 @@ pub async fn callback(
         .map_err(|e| AppError::Internal(anyhow::anyhow!("Google token parse error: {}", e)))?;
 
     // Fetch user info
-    let user_info_resp = client
+    let user_info_resp = state.http
         .get("https://www.googleapis.com/oauth2/v2/userinfo")
         .bearer_auth(&token.access_token)
         .send()
@@ -121,29 +122,12 @@ pub async fn callback(
         user_info.picture.as_deref(),
     ).await.map_err(AppError::Database)?;
 
-    let secret = std::env::var("JWT_SECRET").unwrap_or_else(|_| "secret".into());
-    let jwt = auth::encode_token(user_id, &email, is_admin, &secret)?;
+    let jwt = auth::encode_token(user_id, &email, is_admin, &state.config.jwt_secret)?;
 
     let state_val = params.state.as_deref().unwrap_or("app");
 
-    // Admin panel → redirect with token in URL fragment
+    // Admin panel → OAuth session redirect (no token in URL)
     if state_val == "admin" {
-        let admin_url = std::env::var("ADMIN_URL")
-            .unwrap_or_else(|_| "https://admin.endurunce.nl".into());
-        let redirect_url = format!(
-            "{}/#token={}&is_admin={}&email={}",
-            admin_url,
-            jwt,
-            is_admin,
-            urlencoding::encode(&email),
-        );
-        return Ok(CallbackResponse::Redirect(Redirect::to(&redirect_url)));
-    }
-
-    // Flutter web → store JWT in a short-lived session, redirect with session ID
-    if state_val == "web" {
-        let app_url = std::env::var("APP_URL")
-            .unwrap_or_else(|_| "https://app.endurunce.nl".into());
         let session_id = crate::db::oauth_sessions::create(
             &state.db,
             &jwt,
@@ -154,20 +138,39 @@ pub async fn callback(
         )
         .await
         .map_err(AppError::Database)?;
-        let redirect_url = format!("{}/#/oauth?session={}", app_url, session_id);
+        let redirect_url = format!("{}/#/oauth?session={}", state.config.admin_url, session_id);
         return Ok(CallbackResponse::Redirect(Redirect::to(&redirect_url)));
     }
 
-    // Mobile app → redirect to custom scheme
-    if state_val == "app" {
-        let name_param = user_info.name.as_deref().map(urlencoding::encode).unwrap_or_default();
-        let redirect_url = format!(
-            "endurunce://auth?token={}&is_admin={}&email={}&display_name={}",
-            jwt,
+    // Flutter web → OAuth session redirect (no token in URL)
+    if state_val == "web" {
+        let session_id = crate::db::oauth_sessions::create(
+            &state.db,
+            &jwt,
+            &email,
+            user_info.name.as_deref(),
             is_admin,
-            urlencoding::encode(&email),
-            name_param,
-        );
+            is_new,
+        )
+        .await
+        .map_err(AppError::Database)?;
+        let redirect_url = format!("{}/#/oauth?session={}", state.config.app_url, session_id);
+        return Ok(CallbackResponse::Redirect(Redirect::to(&redirect_url)));
+    }
+
+    // Mobile app → redirect to custom scheme with OAuth session
+    if state_val == "app" {
+        let session_id = crate::db::oauth_sessions::create(
+            &state.db,
+            &jwt,
+            &email,
+            user_info.name.as_deref(),
+            is_admin,
+            is_new,
+        )
+        .await
+        .map_err(AppError::Database)?;
+        let redirect_url = format!("endurunce://auth?session={}", session_id);
         return Ok(CallbackResponse::Redirect(Redirect::to(&redirect_url)));
     }
 
@@ -179,18 +182,4 @@ pub async fn callback(
         "display_name": user_info.name,
         "avatar_url": user_info.picture,
     }))))
-}
-
-pub enum CallbackResponse {
-    Json(Json<serde_json::Value>),
-    Redirect(Redirect),
-}
-
-impl axum::response::IntoResponse for CallbackResponse {
-    fn into_response(self) -> axum::response::Response {
-        match self {
-            CallbackResponse::Json(j) => j.into_response(),
-            CallbackResponse::Redirect(r) => r.into_response(),
-        }
-    }
 }

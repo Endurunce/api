@@ -34,8 +34,14 @@ impl IntoResponse for AppError {
             AppError::TooManyRequests(msg) => (StatusCode::TOO_MANY_REQUESTS, msg.clone()),
             AppError::Unauthorized         => (StatusCode::UNAUTHORIZED, "Unauthorized".into()),
             AppError::Forbidden            => (StatusCode::FORBIDDEN, "Forbidden".into()),
-            AppError::Database(e)          => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
-            AppError::Internal(e)          => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+            AppError::Database(e) => {
+                tracing::error!("Database error: {}", e);
+                (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error".into())
+            }
+            AppError::Internal(e) => {
+                tracing::error!("Internal error: {}", e);
+                (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error".into())
+            }
         };
 
         (status, Json(json!({ "error": message }))).into_response()

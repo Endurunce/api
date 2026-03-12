@@ -1,5 +1,6 @@
 use sqlx::PgPool;
 use uuid::Uuid;
+use chrono::NaiveDate;
 use serde_json::Value;
 
 use crate::models::profile::Profile;
@@ -100,6 +101,66 @@ pub async fn fetch_by_user(db: &PgPool, user_id: Uuid) -> Result<Option<Uuid>, s
     .await?;
 
     Ok(row.map(|r| r.id))
+}
+
+/// Fetch user profile for the /api/profiles/me route
+pub async fn fetch_me(db: &PgPool, user_id: Uuid) -> Result<Option<serde_json::Value>, sqlx::Error> {
+    let row = sqlx::query!(
+        r#"
+        SELECT name, date_of_birth, gender, race_goal, race_date, terrain,
+               weekly_km, running_years
+        FROM profiles
+        WHERE user_id = $1
+        "#,
+        user_id,
+    )
+    .fetch_optional(db)
+    .await?;
+
+    Ok(row.map(|r| serde_json::json!({
+        "name":          r.name,
+        "date_of_birth": r.date_of_birth,
+        "gender":        r.gender,
+        "race_goal":     r.race_goal,
+        "race_date":     r.race_date,
+        "terrain":       r.terrain,
+        "weekly_km":     r.weekly_km,
+        "running_years": r.running_years,
+    })))
+}
+
+/// Update editable personal fields on the profile
+pub async fn update_me(
+    db: &PgPool,
+    user_id: Uuid,
+    name: Option<&str>,
+    date_of_birth: Option<NaiveDate>,
+    gender: Option<&str>,
+    weekly_km: Option<f32>,
+    running_years: Option<&str>,
+) -> Result<(), sqlx::Error> {
+    sqlx::query!(
+        r#"
+        UPDATE profiles SET
+            name          = COALESCE($1, name),
+            date_of_birth = COALESCE($2, date_of_birth),
+            gender        = COALESCE($3, gender),
+            weekly_km     = COALESCE($4::float4, weekly_km),
+            running_years = COALESCE($5, running_years),
+            updated_at    = NOW()
+        WHERE user_id = $6
+        "#,
+        name,
+        date_of_birth,
+        gender,
+        weekly_km,
+        running_years,
+        user_id,
+    )
+    .execute(db)
+    .await?;
+
+    Ok(())
 }
 
 /// Returns the profile as a compact JSON string for AI context injection.

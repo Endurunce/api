@@ -1,19 +1,8 @@
 use sqlx::PgPool;
 use uuid::Uuid;
 use chrono::NaiveDate;
-use serde_json::Value;
 
 use crate::models::plan::Plan;
-
-pub struct PlanRow {
-    pub id: Uuid,
-    pub user_id: Uuid,
-    pub num_weeks: i16,
-    pub race_date: Option<NaiveDate>,
-    pub race_goal: String,
-    pub weeks: Value,
-    pub active: bool,
-}
 
 pub async fn insert(
     db: &PgPool,

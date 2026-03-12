@@ -340,7 +340,7 @@ mod tests {
             id: Uuid::new_v4(),
             user_id: Uuid::new_v4(),
             name: "Test Runner".into(),
-            age: 35,
+            date_of_birth: chrono::NaiveDate::from_ymd_opt(1991, 1, 15).unwrap(),
             gender: Gender::Male,
             running_years: RunningExperience::TwoToFiveYears,
             weekly_km: 55.0,
@@ -349,9 +349,11 @@ mod tests {
             time_half_marathon: None,
             time_marathon: None,
             race_goal: RaceGoal::Marathon,
+            race_time_goal: None,
             race_date: None,
             terrain: Terrain::Road,
             training_days: vec![Weekday(0), Weekday(2), Weekday(4), Weekday(6)],
+            strength_days: vec![],
             max_duration_per_day: vec![],
             long_run_day: Weekday(6),
             max_hr: Some(185),
@@ -554,9 +556,9 @@ mod tests {
     #[test]
     fn older_athlete_gets_reduced_volume() {
         let mut young = base_profile();
-        young.age = 30;
+        young.date_of_birth = chrono::NaiveDate::from_ymd_opt(1996, 1, 15).unwrap(); // ~30
         let mut old = base_profile();
-        old.age = 60;
+        old.date_of_birth = chrono::NaiveDate::from_ymd_opt(1966, 1, 15).unwrap(); // ~60
 
         let young_plan = generate_plan(&young);
         let old_plan = generate_plan(&old);

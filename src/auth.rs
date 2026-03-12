@@ -1,6 +1,6 @@
 use axum::{
     async_trait,
-    extract::FromRequestParts,
+    extract::{FromRef, FromRequestParts},
     http::request::Parts,
     RequestPartsExt,
 };
@@ -12,7 +12,7 @@ use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation}
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::errors::AppError;
+use crate::{errors::AppError, AppState};
 
 pub const TOKEN_EXPIRY_HOURS: i64 = 24 * 7; // 7 days
 
@@ -59,22 +59,24 @@ pub fn decode_token(token: &str, secret: &str) -> Result<Claims, AppError> {
     .map_err(|_| AppError::Unauthorized)
 }
 
-/// Axum extractor: pulls Claims from the Authorization: Bearer header
+/// Axum extractor: pulls Claims from the Authorization: Bearer header.
+/// Reads JWT_SECRET from AppState config instead of env var.
 #[async_trait]
 impl<S> FromRequestParts<S> for Claims
 where
+    AppState: FromRef<S>,
     S: Send + Sync,
 {
     type Rejection = AppError;
 
-    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
         let TypedHeader(Authorization(bearer)) = parts
             .extract::<TypedHeader<Authorization<Bearer>>>()
             .await
             .map_err(|_| AppError::Unauthorized)?;
 
-        let secret = std::env::var("JWT_SECRET").unwrap_or_else(|_| "secret".into());
-        decode_token(bearer.token(), &secret)
+        let app_state = AppState::from_ref(state);
+        decode_token(bearer.token(), &app_state.config.jwt_secret)
     }
 }
 
@@ -82,6 +84,7 @@ where
 #[async_trait]
 impl<S> FromRequestParts<S> for AdminClaims
 where
+    AppState: FromRef<S>,
     S: Send + Sync,
 {
     type Rejection = AppError;

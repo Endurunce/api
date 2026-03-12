@@ -1,6 +1,7 @@
 pub mod admin;
 pub mod auth;
 pub mod coach;
+pub mod common;
 pub mod feedback;
 pub mod google;
 pub mod health;
