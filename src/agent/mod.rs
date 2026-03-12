@@ -57,6 +57,46 @@ impl CoachAgent {
         Self { db, config, http }
     }
 
+    /// Simple one-shot chat: send a prompt, get a text response. No tools, no history.
+    /// Used for structured generation tasks like plan creation.
+    pub async fn chat_single(&self, prompt: &str) -> Result<String, AgentError> {
+        let messages = vec![serde_json::json!({
+            "role": "user",
+            "content": prompt
+        })];
+
+        let body = serde_json::json!({
+            "model": &self.config.anthropic_model,
+            "max_tokens": 16000,
+            "messages": messages,
+        });
+
+        let api_key = self.config.anthropic_api_key.as_deref()
+            .ok_or_else(|| AgentError::Config("ANTHROPIC_API_KEY not set".into()))?;
+
+        let resp = self.http
+            .post("https://api.anthropic.com/v1/messages")
+            .header("x-api-key", api_key)
+            .header("anthropic-version", "2023-06-01")
+            .header("content-type", "application/json")
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| AgentError::Api(e.to_string()))?;
+
+        let data: serde_json::Value = resp.json().await
+            .map_err(|e| AgentError::Api(e.to_string()))?;
+
+        let text = data["content"]
+            .as_array()
+            .and_then(|blocks| blocks.iter().find(|b| b["type"] == "text"))
+            .and_then(|b| b["text"].as_str())
+            .unwrap_or("")
+            .to_string();
+
+        Ok(text)
+    }
+
     /// Main entry point: process any trigger for a user.
     /// Returns the final assistant message text.
     /// If `delta_tx` is provided, streams text deltas and tool events.
