@@ -1,14 +1,14 @@
 use axum::{
     extract::{
         ws::{Message, WebSocket},
-        State, WebSocketUpgrade,
+        Query, State, WebSocketUpgrade,
     },
     response::IntoResponse,
 };
 use futures::{SinkExt, StreamExt};
 use serde::Deserialize;
 
-use crate::{auth::Claims, AppState};
+use crate::{auth, errors::AppError, AppState};
 
 use super::{AgentTrigger, CoachAgent, StreamEvent};
 
@@ -19,9 +19,16 @@ enum WsInput {
     Message { content: String },
 }
 
-/// GET /api/ws — WebSocket upgrade handler for the AI coach agent.
+/// Query parameters for WebSocket auth (browsers can't send headers on WS).
+#[derive(Debug, Deserialize)]
+pub struct WsAuth {
+    token: String,
+}
+
+/// GET /api/ws?token=JWT — WebSocket upgrade handler for the AI coach agent.
 ///
-/// **Auth:** Bearer JWT required (extracted before upgrade).
+/// **Auth:** JWT token passed as `?token=` query parameter (browsers cannot set
+/// custom headers on WebSocket connections).
 ///
 /// Upgrades the HTTP connection to a WebSocket, then streams AI responses
 /// (text deltas, tool use events, tool results) back to the client in real-time.
@@ -32,14 +39,15 @@ enum WsInput {
 pub async fn ws_handler(
     ws: WebSocketUpgrade,
     State(state): State<AppState>,
-    claims: Claims,
-) -> impl IntoResponse {
+    Query(auth_query): Query<WsAuth>,
+) -> Result<impl IntoResponse, AppError> {
+    let claims = auth::decode_token(&auth_query.token, &state.config.jwt_secret)?;
     let agent = CoachAgent::new(
         state.db.clone(),
         state.config.clone(),
         state.http.clone(),
     );
-    ws.on_upgrade(move |socket| handle_socket(socket, agent, claims.sub))
+    Ok(ws.on_upgrade(move |socket| handle_socket(socket, agent, claims.sub)))
 }
 
 async fn handle_socket(socket: WebSocket, agent: CoachAgent, user_id: uuid::Uuid) {
