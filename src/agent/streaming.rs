@@ -10,13 +10,15 @@ use serde::Deserialize;
 
 use crate::{auth, errors::AppError, AppState};
 
-use super::{AgentTrigger, CoachAgent, StreamEvent};
+use super::{intake, AgentTrigger, CoachAgent, StreamEvent};
 
 /// WebSocket input message from the client.
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum WsInput {
     Message { content: String },
+    StartIntake,
+    QuickReply { value: String },
 }
 
 /// Query parameters for WebSocket auth (browsers can't send headers on WS).
@@ -26,16 +28,6 @@ pub struct WsAuth {
 }
 
 /// GET /api/ws?token=JWT — WebSocket upgrade handler for the AI coach agent.
-///
-/// **Auth:** JWT token passed as `?token=` query parameter (browsers cannot set
-/// custom headers on WebSocket connections).
-///
-/// Upgrades the HTTP connection to a WebSocket, then streams AI responses
-/// (text deltas, tool use events, tool results) back to the client in real-time.
-///
-/// **Client → Server:** `{ "type": "message", "content": "..." }`
-///
-/// **Server → Client:** `StreamEvent` variants (text_delta, tool_use, tool_result, message_end, error).
 pub async fn ws_handler(
     ws: WebSocketUpgrade,
     State(state): State<AppState>,
@@ -72,14 +64,50 @@ async fn handle_socket(socket: WebSocket, agent: CoachAgent, user_id: uuid::Uuid
                 };
 
                 match input {
+                    WsInput::StartIntake => {
+                        let (tx, mut rx) = tokio::sync::mpsc::channel::<StreamEvent>(64);
+
+                        let uid = user_id;
+                        tokio::spawn(async move {
+                            if let Err(e) = intake::start_intake(uid, &tx).await {
+                                tracing::error!("Intake start error for user {}: {}", uid, e);
+                            }
+                        });
+
+                        while let Some(event) = rx.recv().await {
+                            let json = serde_json::to_string(&event).unwrap_or_default();
+                            if ws_tx.send(Message::Text(json.into())).await.is_err() {
+                                break;
+                            }
+                        }
+                    }
+                    WsInput::QuickReply { value } | WsInput::Message { content: value }
+                        if intake::has_active_intake(user_id).await =>
+                    {
+                        let (tx, mut rx) = tokio::sync::mpsc::channel::<StreamEvent>(64);
+
+                        let agent_clone = agent.clone();
+                        let uid = user_id;
+                        let val = value.clone();
+                        tokio::spawn(async move {
+                            if let Err(e) = intake::handle_reply(uid, &val, &tx, &agent_clone).await {
+                                tracing::error!("Intake reply error for user {}: {}", uid, e);
+                            }
+                        });
+
+                        while let Some(event) = rx.recv().await {
+                            let json = serde_json::to_string(&event).unwrap_or_default();
+                            if ws_tx.send(Message::Text(json.into())).await.is_err() {
+                                break;
+                            }
+                        }
+                    }
                     WsInput::Message { content } => {
                         let trigger = AgentTrigger::ChatMessage { content };
 
-                        // Create channel for streaming events
                         let (tx, mut rx) =
                             tokio::sync::mpsc::channel::<StreamEvent>(64);
 
-                        // Spawn agent processing in background
                         let agent_clone = agent.clone();
                         let uid = user_id;
                         tokio::spawn(async move {
@@ -88,13 +116,23 @@ async fn handle_socket(socket: WebSocket, agent: CoachAgent, user_id: uuid::Uuid
                             }
                         });
 
-                        // Stream events to the WebSocket
                         while let Some(event) = rx.recv().await {
                             let json = serde_json::to_string(&event).unwrap_or_default();
                             if ws_tx.send(Message::Text(json.into())).await.is_err() {
                                 break;
                             }
                         }
+                    }
+                    WsInput::QuickReply { .. } => {
+                        // Quick reply outside of intake — ignore
+                        let err_event = StreamEvent::Error {
+                            message: "Quick reply niet verwacht buiten intake.".into(),
+                        };
+                        let _ = ws_tx
+                            .send(Message::Text(
+                                serde_json::to_string(&err_event).unwrap_or_default().into(),
+                            ))
+                            .await;
                     }
                 }
             }
