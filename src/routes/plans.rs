@@ -153,6 +153,7 @@ REGELS:
 
     // Extract JSON from response (might be wrapped in ```json ... ```)
     let json_str = extract_json(&response)?;
+    let json_str = sanitize_plan_json(&json_str);
     let plan: crate::models::plan::Plan = serde_json::from_str(&json_str)?;
 
     Ok(plan)
@@ -181,6 +182,22 @@ fn extract_json(text: &str) -> Result<String, anyhow::Error> {
         }
     }
     anyhow::bail!("No JSON found in AI response")
+}
+
+/// Fix common AI mistakes in generated plan JSON — normalize enum values.
+fn sanitize_plan_json(json: &str) -> String {
+    json.replace("\"intervals\"", "\"interval\"")
+        .replace("\"recovery\"", "\"easy\"")
+        .replace("\"threshold\"", "\"tempo\"")
+        .replace("\"long_run\"", "\"long\"")
+        .replace("\"hill\"", "\"tempo\"")
+        .replace("\"fartlek\"", "\"tempo\"")
+        .replace("\"speed\"", "\"interval\"")
+        .replace("\"build_1\"", "\"build_one\"")
+        .replace("\"build_2\"", "\"build_two\"")
+        .replace("\"build1\"", "\"build_one\"")
+        .replace("\"build2\"", "\"build_two\"")
+        .replace("\"tapering\"", "\"taper\"")
 }
 
 /// GET /api/plans — returns the authenticated user's active training plan.

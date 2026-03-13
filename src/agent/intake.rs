@@ -727,11 +727,28 @@ REGELS:
 
     let response = agent.chat_single(&prompt).await?;
 
-    // Extract JSON from response
+    // Extract JSON from response and sanitize enum values
     let json_str = extract_json_from_response(&response)?;
+    let json_str = sanitize_plan_json(&json_str);
     let plan: crate::models::plan::Plan = serde_json::from_str(&json_str)?;
 
     Ok(plan)
+}
+
+/// Fix common AI mistakes in generated plan JSON — normalize enum values.
+fn sanitize_plan_json(json: &str) -> String {
+    json.replace("\"intervals\"", "\"interval\"")
+        .replace("\"recovery\"", "\"easy\"")
+        .replace("\"threshold\"", "\"tempo\"")
+        .replace("\"long_run\"", "\"long\"")
+        .replace("\"hill\"", "\"tempo\"")
+        .replace("\"fartlek\"", "\"tempo\"")
+        .replace("\"speed\"", "\"interval\"")
+        .replace("\"build_1\"", "\"build_one\"")
+        .replace("\"build_2\"", "\"build_two\"")
+        .replace("\"build1\"", "\"build_one\"")
+        .replace("\"build2\"", "\"build_two\"")
+        .replace("\"tapering\"", "\"taper\"")
 }
 
 fn extract_json_from_response(text: &str) -> Result<String, anyhow::Error> {
