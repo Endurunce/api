@@ -2,111 +2,83 @@ use chrono::NaiveDate;
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::models::injury::InjuryReport;
+use crate::models::injury::{Injury, InjuryInput};
 
 pub async fn insert(
     db: &PgPool,
-    injury: &InjuryReport,
-    plan_id: Option<Uuid>,
+    user_id: Uuid,
+    input: &InjuryInput,
 ) -> Result<Uuid, sqlx::Error> {
-    let locations: Vec<String> = injury.locations.iter()
-        .map(|l| format!("{:?}", l).to_lowercase())
-        .collect();
-
-    let row = sqlx::query!(
-        r#"
-        INSERT INTO injury_reports (
-            id, user_id, plan_id,
-            reported_at, locations, severity,
-            can_walk, can_run, description, recovery_status
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-        RETURNING id
-        "#,
-        injury.id,
-        injury.user_id,
-        plan_id,
-        injury.reported_at,
-        &locations,
-        injury.severity as i16,
-        injury.can_walk,
-        injury.can_run,
-        injury.description,
-        format!("{:?}", injury.recovery_status).to_lowercase(),
+    let (id,) = sqlx::query_as::<_, (Uuid,)>(
+        r#"INSERT INTO injuries (user_id, locations, severity, can_walk, can_run, description)
+           VALUES ($1, $2, $3, $4, $5, $6)
+           RETURNING id"#,
     )
+    .bind(user_id)
+    .bind(&input.locations)
+    .bind(input.severity)
+    .bind(input.can_walk)
+    .bind(input.can_run)
+    .bind(&input.description)
     .fetch_one(db)
     .await?;
 
-    Ok(row.id)
+    Ok(id)
 }
 
-pub async fn fetch_active(db: &PgPool, user_id: Uuid) -> Result<Vec<InjuryRow>, sqlx::Error> {
-    sqlx::query_as!(
-        InjuryRow,
-        r#"
-        SELECT id, severity, can_run, recovery_status, reported_at, description
-        FROM injury_reports
-        WHERE user_id = $1 AND recovery_status != 'resolved'
-        ORDER BY reported_at DESC
-        "#,
-        user_id,
+/// List active (non-resolved) injuries for a user.
+pub async fn list_active(db: &PgPool, user_id: Uuid) -> Result<Vec<Injury>, sqlx::Error> {
+    sqlx::query_as::<_, Injury>(
+        "SELECT id, user_id, locations, severity, can_walk, can_run, description, status, reported_at, resolved_at \
+         FROM injuries WHERE user_id = $1 AND status != 'resolved' ORDER BY reported_at DESC",
     )
+    .bind(user_id)
     .fetch_all(db)
     .await
 }
 
-/// Resolve an injury — scoped to user_id for ownership safety.
-/// Returns `true` if a row was updated, `false` if not found or already resolved.
-pub async fn resolve_by_user(
+/// List all injuries for a user (history).
+pub async fn list_all(db: &PgPool, user_id: Uuid) -> Result<Vec<Injury>, sqlx::Error> {
+    sqlx::query_as::<_, Injury>(
+        "SELECT id, user_id, locations, severity, can_walk, can_run, description, status, reported_at, resolved_at \
+         FROM injuries WHERE user_id = $1 ORDER BY reported_at DESC",
+    )
+    .bind(user_id)
+    .fetch_all(db)
+    .await
+}
+
+/// Resolve an injury.
+pub async fn resolve(
     db: &PgPool,
     injury_id: Uuid,
     user_id: Uuid,
 ) -> Result<bool, sqlx::Error> {
-    let result = sqlx::query!(
-        r#"
-        UPDATE injury_reports
-        SET recovery_status = 'resolved', resolved_at = CURRENT_DATE, updated_at = NOW()
-        WHERE id = $1 AND user_id = $2 AND recovery_status != 'resolved'
-        "#,
-        injury_id,
-        user_id,
+    let result = sqlx::query(
+        "UPDATE injuries SET status = 'resolved', resolved_at = $3, updated_at = NOW() \
+         WHERE id = $1 AND user_id = $2 AND status != 'resolved'",
     )
+    .bind(injury_id)
+    .bind(user_id)
+    .bind(chrono::Local::now().date_naive())
     .execute(db)
     .await?;
 
     Ok(result.rows_affected() > 0)
 }
 
-pub struct InjuryRow {
-    pub id: Uuid,
-    pub severity: i16,
-    pub can_run: bool,
-    pub recovery_status: String,
-    pub reported_at: NaiveDate,
-    pub description: Option<String>,
-}
-
-pub struct InjuryHistoryRow {
-    pub id: Uuid,
-    pub severity: i16,
-    pub can_run: bool,
-    pub recovery_status: String,
-    pub reported_at: NaiveDate,
-    pub resolved_at: Option<NaiveDate>,
-    pub locations: Vec<String>,
-    pub description: Option<String>,
-}
-
-pub async fn fetch_history(db: &PgPool, user_id: Uuid) -> Result<Vec<InjuryHistoryRow>, sqlx::Error> {
-    sqlx::query_as!(
-        InjuryHistoryRow,
-        r#"
-        SELECT id, severity, can_run, recovery_status, reported_at, resolved_at, locations, description
-        FROM injury_reports
-        WHERE user_id = $1
-        ORDER BY reported_at DESC
-        "#,
-        user_id,
+/// Fetch a single injury by ID.
+pub async fn fetch_by_id(
+    db: &PgPool,
+    injury_id: Uuid,
+    user_id: Uuid,
+) -> Result<Option<Injury>, sqlx::Error> {
+    sqlx::query_as::<_, Injury>(
+        "SELECT id, user_id, locations, severity, can_walk, can_run, description, status, reported_at, resolved_at \
+         FROM injuries WHERE id = $1 AND user_id = $2",
     )
-    .fetch_all(db)
+    .bind(injury_id)
+    .bind(user_id)
+    .fetch_optional(db)
     .await
 }

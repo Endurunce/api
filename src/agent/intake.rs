@@ -5,11 +5,6 @@ use uuid::Uuid;
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 
-use crate::models::profile::{
-    Gender, HrZone, Profile, RaceGoal, RunningExperience, SleepCategory,
-    Terrain, Weekday, PreviousUltra,
-};
-
 use super::{CoachAgent, InputType, QuickReply, StreamEvent};
 
 // ── Intake steps ──────────────────────────────────────────────────────────────
@@ -55,7 +50,6 @@ impl IntakeStep {
         }
     }
 
-    /// Dutch question text for each step.
     fn question(&self) -> &'static str {
         match self {
             Self::Welcome => "Welkom bij EnduRunce! 🏃 Ik ben je persoonlijke AI-hardloopcoach. Laten we kennismaken zodat ik het perfecte trainingsplan voor je kan maken. Klaar om te beginnen?",
@@ -71,12 +65,10 @@ impl IntakeStep {
             Self::LongRunDay => "Op welke dag wil je je lange duurloop doen?",
             Self::HeartRate => "Wat is je rusthartslag? (bijv. 55 — typ 'skip' als je het niet weet)",
             Self::Health => "Heb je klachten of blessures waar ik rekening mee moet houden? (typ 'nee' als je gezond bent)",
-            Self::Summary => "", // Dynamically generated
-            Self::Done => "",
+            Self::Summary | Self::Done => "",
         }
     }
 
-    /// Returns quick reply options and input type for applicable steps.
     fn quick_replies(&self) -> Option<(String, Vec<QuickReply>, InputType)> {
         match self {
             Self::Welcome => Some(("welcome".into(), vec![
@@ -100,12 +92,12 @@ impl IntakeStep {
                 QuickReply { label: "Overslaan".into(), value: "skip".into(), emoji: Some("⏭️".into()) },
             ], InputType::DurationPicker)),
             Self::RaceGoal => Some(("race_goal".into(), vec![
-                QuickReply { label: "5 km".into(), value: "five_km".into(), emoji: Some("⚡".into()) },
-                QuickReply { label: "10 km".into(), value: "ten_km".into(), emoji: Some("🎯".into()) },
+                QuickReply { label: "5 km".into(), value: "5k".into(), emoji: Some("⚡".into()) },
+                QuickReply { label: "10 km".into(), value: "10k".into(), emoji: Some("🎯".into()) },
                 QuickReply { label: "Halve marathon".into(), value: "half_marathon".into(), emoji: Some("🥈".into()) },
                 QuickReply { label: "Marathon".into(), value: "marathon".into(), emoji: Some("🏆".into()) },
-                QuickReply { label: "50 km".into(), value: "fifty_km".into(), emoji: Some("🦅".into()) },
-                QuickReply { label: "100 km".into(), value: "hundred_km".into(), emoji: Some("🔥".into()) },
+                QuickReply { label: "50 km".into(), value: "50k".into(), emoji: Some("🦅".into()) },
+                QuickReply { label: "100 km".into(), value: "100k".into(), emoji: Some("🔥".into()) },
             ], InputType::Chips)),
             Self::RaceDate => Some(("race_date".into(), vec![], InputType::DatePicker)),
             Self::TrainingDays => Some(("training_days".into(), vec![
@@ -148,16 +140,16 @@ pub struct IntakeState {
     pub step: IntakeStep,
     pub name: Option<String>,
     pub date_of_birth: Option<NaiveDate>,
-    pub gender: Option<Gender>,
-    pub running_years: Option<RunningExperience>,
+    pub gender: Option<String>,
+    pub running_experience: Option<String>,
     pub weekly_km: Option<f32>,
     pub time_10k: Option<String>,
-    pub race_goal: Option<RaceGoal>,
+    pub race_goal: Option<String>,
     pub race_date: Option<NaiveDate>,
-    pub training_days: Vec<Weekday>,
-    pub long_run_day: Option<Weekday>,
-    pub rest_hr: Option<u16>,
-    pub max_hr: Option<u16>,
+    pub training_days: Vec<i16>,
+    pub long_run_day: Option<i16>,
+    pub rest_hr: Option<i16>,
+    pub max_hr: Option<i16>,
     pub complaints: Option<String>,
 }
 
@@ -168,7 +160,7 @@ impl IntakeState {
             name: None,
             date_of_birth: None,
             gender: None,
-            running_years: None,
+            running_experience: None,
             weekly_km: None,
             time_10k: None,
             race_goal: None,
@@ -181,60 +173,65 @@ impl IntakeState {
         }
     }
 
-    /// Build a Profile from the collected intake data.
-    pub fn to_profile(&self, user_id: Uuid) -> Option<Profile> {
-        let rest_hr = self.rest_hr.unwrap_or(60);
-        let max_hr = self.max_hr;
-        let hr_zones = max_hr.map(|m| HrZone::calculate(m, rest_hr));
-
-        Some(Profile {
-            id: Uuid::new_v4(),
-            user_id,
+    /// Build a ProfileInput from the collected intake data.
+    pub fn to_profile_input(&self) -> Option<crate::models::profile::ProfileInput> {
+        Some(crate::models::profile::ProfileInput {
             name: self.name.clone()?,
             date_of_birth: self.date_of_birth?,
             gender: self.gender.clone()?,
-            running_years: self.running_years.clone()?,
-            weekly_km: self.weekly_km?,
-            previous_ultra: PreviousUltra::None,
+            running_experience: self.running_experience.clone(),
+            weekly_km: self.weekly_km,
+            time_5k: None,
             time_10k: self.time_10k.clone(),
-            time_half_marathon: None,
+            time_half: None,
             time_marathon: None,
-            race_goal: self.race_goal.clone()?,
-            race_time_goal: None,
-            race_date: self.race_date,
-            terrain: Terrain::Road,
-            training_days: self.training_days.clone(),
-            strength_days: Vec::new(),
-            max_duration_per_day: Vec::new(),
-            long_run_day: self.long_run_day.unwrap_or(Weekday(5)),
-            max_hr,
-            rest_hr,
-            hr_zones,
-            sleep_hours: SleepCategory::SevenToEight,
+            rest_hr: self.rest_hr,
+            max_hr: self.max_hr,
+            sleep_quality: None,
             complaints: self.complaints.clone(),
-            previous_injuries: Vec::new(),
         })
     }
 
-    /// Build a summary string.
+    /// Build a TrainingPreferencesInput.
+    pub fn to_prefs_input(&self) -> crate::models::training_preferences::TrainingPreferencesInput {
+        crate::models::training_preferences::TrainingPreferencesInput {
+            training_days: if self.training_days.is_empty() {
+                vec![1, 3, 5]
+            } else {
+                self.training_days.clone()
+            },
+            long_run_day: self.long_run_day,
+            strength_days: None,
+            max_duration_per_day: None,
+            terrain: None,
+        }
+    }
+
     fn summary(&self) -> String {
         let days_nl = ["Ma", "Di", "Wo", "Do", "Vr", "Za", "Zo"];
         let training_str: Vec<&str> = self.training_days
             .iter()
-            .map(|d| *days_nl.get(d.0 as usize).unwrap_or(&"?"))
+            .filter_map(|&d| days_nl.get(d as usize).copied())
             .collect();
         let long_run = self.long_run_day
-            .map(|d| days_nl.get(d.0 as usize).unwrap_or(&"?").to_string())
-            .unwrap_or_else(|| "?".into());
+            .and_then(|d| days_nl.get(d as usize).copied())
+            .unwrap_or("?");
 
-        let goal_label = match &self.race_goal {
-            Some(RaceGoal::FiveKm) => "5 km",
-            Some(RaceGoal::TenKm) => "10 km",
-            Some(RaceGoal::HalfMarathon) => "Halve marathon",
-            Some(RaceGoal::Marathon) => "Marathon",
-            Some(RaceGoal::FiftyKm) => "50 km",
-            Some(RaceGoal::HundredKm) => "100 km",
+        let goal_label = match self.race_goal.as_deref() {
+            Some("5k") => "5 km",
+            Some("10k") => "10 km",
+            Some("half_marathon") => "Halve marathon",
+            Some("marathon") => "Marathon",
+            Some("50k") => "50 km",
+            Some("100k") => "100 km",
             _ => "Onbekend",
+        };
+
+        let gender_label = match self.gender.as_deref() {
+            Some("male") => "Man",
+            Some("female") => "Vrouw",
+            Some("other") => "Anders",
+            _ => "?",
         };
 
         format!(
@@ -242,7 +239,7 @@ impl IntakeState {
              👤 Naam: {}\n\
              🎂 Geboortedatum: {}\n\
              ⚧ Geslacht: {}\n\
-             🏃 Ervaring: {:?}\n\
+             🏃 Ervaring: {}\n\
              📏 Wekelijks: {:.0} km\n\
              🎯 Doel: {}\n\
              📅 Wedstrijddatum: {}\n\
@@ -253,13 +250,8 @@ impl IntakeState {
              Klopt dit? Dan ga ik je plan maken!",
             self.name.as_deref().unwrap_or("?"),
             self.date_of_birth.map(|d| d.to_string()).unwrap_or_else(|| "?".into()),
-            match &self.gender {
-                Some(Gender::Male) => "Man",
-                Some(Gender::Female) => "Vrouw",
-                Some(Gender::Other) => "Anders",
-                None => "?",
-            },
-            self.running_years.as_ref().map(|r| format!("{:?}", r)).unwrap_or_else(|| "?".into()),
+            gender_label,
+            self.running_experience.as_deref().unwrap_or("?"),
             self.weekly_km.unwrap_or(0.0),
             goal_label,
             self.race_date.map(|d| d.to_string()).unwrap_or_else(|| "?".into()),
@@ -276,13 +268,11 @@ impl IntakeState {
 static INTAKE_STATES: std::sync::LazyLock<Arc<Mutex<HashMap<Uuid, IntakeState>>>> =
     std::sync::LazyLock::new(|| Arc::new(Mutex::new(HashMap::new())));
 
-/// Check if a user has an active intake session.
 pub async fn has_active_intake(user_id: Uuid) -> bool {
     let map = INTAKE_STATES.lock().await;
     map.contains_key(&user_id)
 }
 
-/// Start a new intake session for a user, sending the welcome message.
 pub async fn start_intake(
     user_id: Uuid,
     tx: &mpsc::Sender<StreamEvent>,
@@ -292,11 +282,9 @@ pub async fn start_intake(
         let mut map = INTAKE_STATES.lock().await;
         map.insert(user_id, state);
     }
-
     send_step(user_id, tx).await
 }
 
-/// Handle a user reply during intake. Returns true if intake is still in progress.
 pub async fn handle_reply(
     user_id: Uuid,
     value: &str,
@@ -311,12 +299,10 @@ pub async fn handle_reply(
         }
     };
 
-    // Validate and store the answer
     let validation = validate_and_store(user_id, current_step, value).await;
 
     match validation {
         ValidationResult::Ok => {
-            // Advance to next step
             let next_step = {
                 let mut map = INTAKE_STATES.lock().await;
                 let state = map.get_mut(&user_id).unwrap();
@@ -325,15 +311,12 @@ pub async fn handle_reply(
             };
 
             if next_step == IntakeStep::Summary {
-                // Send summary
                 let summary = {
                     let map = INTAKE_STATES.lock().await;
                     map.get(&user_id).unwrap().summary()
                 };
                 let _ = tx.send(StreamEvent::TextDelta { delta: summary }).await;
                 let _ = tx.send(StreamEvent::MessageEnd).await;
-
-                // Send summary quick replies
                 if let Some((qid, opts, itype)) = IntakeStep::Summary.quick_replies() {
                     let _ = tx.send(StreamEvent::QuickReplies {
                         question_id: qid,
@@ -345,7 +328,6 @@ pub async fn handle_reply(
             }
 
             if next_step == IntakeStep::Done {
-                // Build profile and generate plan
                 return complete_intake(user_id, tx, agent).await;
             }
 
@@ -353,7 +335,6 @@ pub async fn handle_reply(
             Ok(true)
         }
         ValidationResult::Restart => {
-            // Reset intake state
             {
                 let mut map = INTAKE_STATES.lock().await;
                 map.insert(user_id, IntakeState::new());
@@ -364,7 +345,6 @@ pub async fn handle_reply(
         ValidationResult::Error(msg) => {
             let _ = tx.send(StreamEvent::TextDelta { delta: msg }).await;
             let _ = tx.send(StreamEvent::MessageEnd).await;
-            // Re-send the same step's quick replies
             if let Some((qid, opts, itype)) = current_step.quick_replies() {
                 let _ = tx.send(StreamEvent::QuickReplies {
                     question_id: qid,
@@ -377,7 +357,6 @@ pub async fn handle_reply(
     }
 }
 
-/// Remove intake state for a user.
 pub async fn clear_intake(user_id: Uuid) {
     let mut map = INTAKE_STATES.lock().await;
     map.remove(&user_id);
@@ -400,12 +379,9 @@ async fn validate_and_store(user_id: Uuid, step: IntakeStep, value: &str) -> Val
     };
 
     match step {
-        IntakeStep::Welcome => {
-            // Any response advances
-            ValidationResult::Ok
-        }
+        IntakeStep::Welcome => ValidationResult::Ok,
         IntakeStep::Name => {
-            if value.is_empty() || value.len() < 2 {
+            if value.len() < 2 {
                 return ValidationResult::Error("Voer alsjeblieft een naam in (minimaal 2 tekens).".into());
             }
             state.name = Some(value.to_string());
@@ -427,28 +403,26 @@ async fn validate_and_store(user_id: Uuid, step: IntakeStep, value: &str) -> Val
         }
         IntakeStep::Gender => {
             let gender = match value.to_lowercase().as_str() {
-                "male" | "man" => Gender::Male,
-                "female" | "vrouw" => Gender::Female,
-                "other" | "anders" => Gender::Other,
+                "male" | "man" => "male",
+                "female" | "vrouw" => "female",
+                "other" | "anders" => "other",
                 _ => return ValidationResult::Error("Kies alsjeblieft een geslacht.".into()),
             };
-            state.gender = Some(gender);
+            state.gender = Some(gender.to_string());
             ValidationResult::Ok
         }
         IntakeStep::Experience => {
-            let exp = match value {
-                "less_than_two_years" => RunningExperience::LessThanTwoYears,
-                "two_to_five_years" => RunningExperience::TwoToFiveYears,
-                "five_to_ten_years" => RunningExperience::FiveToTenYears,
-                "more_than_ten_years" => RunningExperience::MoreThanTenYears,
-                _ => return ValidationResult::Error("Kies een van de opties.".into()),
-            };
-            state.running_years = Some(exp);
-            ValidationResult::Ok
+            match value {
+                "less_than_two_years" | "two_to_five_years" | "five_to_ten_years" | "more_than_ten_years" => {
+                    state.running_experience = Some(value.to_string());
+                    ValidationResult::Ok
+                }
+                _ => ValidationResult::Error("Kies een van de opties.".into()),
+            }
         }
         IntakeStep::WeeklyKm => {
             match value.replace(',', ".").parse::<f32>() {
-                Ok(km) if km >= 0.0 && km <= 300.0 => {
+                Ok(km) if (0.0..=300.0).contains(&km) => {
                     state.weekly_km = Some(km);
                     ValidationResult::Ok
                 }
@@ -464,17 +438,18 @@ async fn validate_and_store(user_id: Uuid, step: IntakeStep, value: &str) -> Val
             ValidationResult::Ok
         }
         IntakeStep::RaceGoal => {
-            let goal = match value {
-                "five_km" => RaceGoal::FiveKm,
-                "ten_km" => RaceGoal::TenKm,
-                "half_marathon" => RaceGoal::HalfMarathon,
-                "marathon" => RaceGoal::Marathon,
-                "fifty_km" => RaceGoal::FiftyKm,
-                "hundred_km" => RaceGoal::HundredKm,
-                _ => return ValidationResult::Error("Kies een wedstrijddoel.".into()),
-            };
-            state.race_goal = Some(goal);
-            ValidationResult::Ok
+            match value {
+                "5k" | "10k" | "half_marathon" | "marathon" | "50k" | "100k" => {
+                    state.race_goal = Some(value.to_string());
+                    ValidationResult::Ok
+                }
+                // Support old format too
+                "five_km" => { state.race_goal = Some("5k".into()); ValidationResult::Ok }
+                "ten_km" => { state.race_goal = Some("10k".into()); ValidationResult::Ok }
+                "fifty_km" => { state.race_goal = Some("50k".into()); ValidationResult::Ok }
+                "hundred_km" => { state.race_goal = Some("100k".into()); ValidationResult::Ok }
+                _ => ValidationResult::Error("Kies een wedstrijddoel.".into()),
+            }
         }
         IntakeStep::RaceDate => {
             match NaiveDate::parse_from_str(value, "%Y-%m-%d") {
@@ -490,14 +465,11 @@ async fn validate_and_store(user_id: Uuid, step: IntakeStep, value: &str) -> Val
             }
         }
         IntakeStep::TrainingDays => {
-            // Value is comma-separated day indices like "0,1,3,5"
-            let days: Vec<Weekday> = value
+            let days: Vec<i16> = value
                 .split(',')
-                .filter_map(|s| s.trim().parse::<u8>().ok())
-                .filter(|&d| d <= 6)
-                .map(Weekday)
+                .filter_map(|s| s.trim().parse::<i16>().ok())
+                .filter(|&d| d >= 0 && d <= 6)
                 .collect();
-
             if days.len() < 2 || days.len() > 7 {
                 return ValidationResult::Error("Kies 2 tot 7 trainingsdagen.".into());
             }
@@ -505,9 +477,9 @@ async fn validate_and_store(user_id: Uuid, step: IntakeStep, value: &str) -> Val
             ValidationResult::Ok
         }
         IntakeStep::LongRunDay => {
-            match value.parse::<u8>() {
-                Ok(d) if d <= 6 => {
-                    state.long_run_day = Some(Weekday(d));
+            match value.parse::<i16>() {
+                Ok(d) if (0..=6).contains(&d) => {
+                    state.long_run_day = Some(d);
                     ValidationResult::Ok
                 }
                 _ => ValidationResult::Error("Kies een dag (0=Ma tot 6=Zo).".into()),
@@ -515,16 +487,15 @@ async fn validate_and_store(user_id: Uuid, step: IntakeStep, value: &str) -> Val
         }
         IntakeStep::HeartRate => {
             if value.to_lowercase() == "skip" {
-                state.rest_hr = Some(60); // default
+                state.rest_hr = Some(60);
                 ValidationResult::Ok
             } else {
-                // May contain rest_hr or rest_hr,max_hr
                 let parts: Vec<&str> = value.split(',').collect();
-                match parts[0].trim().parse::<u16>() {
-                    Ok(rhr) if rhr >= 30 && rhr <= 120 => {
+                match parts[0].trim().parse::<i16>() {
+                    Ok(rhr) if (30..=120).contains(&rhr) => {
                         state.rest_hr = Some(rhr);
                         if parts.len() > 1 {
-                            if let Ok(mhr) = parts[1].trim().parse::<u16>() {
+                            if let Ok(mhr) = parts[1].trim().parse::<i16>() {
                                 if mhr > rhr && mhr <= 230 {
                                     state.max_hr = Some(mhr);
                                 }
@@ -548,14 +519,12 @@ async fn validate_and_store(user_id: Uuid, step: IntakeStep, value: &str) -> Val
             if value == "restart" {
                 return ValidationResult::Restart;
             }
-            // "confirm" or anything else proceeds
             ValidationResult::Ok
         }
         IntakeStep::Done => ValidationResult::Ok,
     }
 }
 
-/// Send the current step's question and quick replies.
 async fn send_step(
     user_id: Uuid,
     tx: &mpsc::Sender<StreamEvent>,
@@ -576,11 +545,9 @@ async fn send_step(
         step.question().to_string()
     };
 
-    // Send question text
     let _ = tx.send(StreamEvent::TextDelta { delta: question }).await;
     let _ = tx.send(StreamEvent::MessageEnd).await;
 
-    // Send quick replies if applicable
     if let Some((question_id, options, input_type)) = step.quick_replies() {
         let _ = tx.send(StreamEvent::QuickReplies {
             question_id,
@@ -592,19 +559,26 @@ async fn send_step(
     Ok(())
 }
 
-/// Complete the intake: build profile, generate plan, save to DB.
+/// Complete the intake: build profile + preferences, generate plan, save to DB.
 async fn complete_intake(
     user_id: Uuid,
     tx: &mpsc::Sender<StreamEvent>,
     agent: &CoachAgent,
 ) -> Result<bool, super::AgentError> {
-    let profile = {
+    let (profile_input, prefs_input, race_goal, race_date, weekly_km, training_days, long_run_day) = {
         let map = INTAKE_STATES.lock().await;
         let state = map.get(&user_id).unwrap();
-        state.to_profile(user_id)
+        let pi = state.to_profile_input();
+        let pr = state.to_prefs_input();
+        let rg = state.race_goal.clone().unwrap_or_else(|| "marathon".into());
+        let rd = state.race_date;
+        let wk = state.weekly_km.unwrap_or(40.0);
+        let td = state.training_days.clone();
+        let lrd = state.long_run_day.unwrap_or(6);
+        (pi, pr, rg, rd, wk, td, lrd)
     };
 
-    let Some(profile) = profile else {
+    let Some(profile_input) = profile_input else {
         let _ = tx.send(StreamEvent::Error {
             message: "Er ontbreken gegevens. Probeer het opnieuw.".into(),
         }).await;
@@ -612,175 +586,57 @@ async fn complete_intake(
         return Ok(false);
     };
 
-    // Send "generating plan" message
     let _ = tx.send(StreamEvent::TextDelta {
         delta: "Top! 🎉 Ik ga nu je persoonlijke trainingsplan genereren. Even geduld...".into(),
     }).await;
     let _ = tx.send(StreamEvent::MessageEnd).await;
 
     // Save profile
-    let profile_id = crate::db::profiles::upsert(&agent.db, &profile)
+    crate::db::profiles::upsert(&agent.db, user_id, &profile_input)
         .await
-        .map_err(|e| super::AgentError::Database(e))?;
+        .map_err(super::AgentError::Database)?;
 
-    // Generate plan using the same AI flow as the regular endpoint
-    let plan_result = generate_plan_for_intake(agent, &profile).await;
+    // Save training preferences
+    crate::db::training_preferences::upsert(&agent.db, user_id, &prefs_input)
+        .await
+        .map_err(super::AgentError::Database)?;
 
-    match plan_result {
-        Ok(plan) => {
-            let race_date = profile.race_date;
-            let race_goal = format!("{:?}", profile.race_goal);
-            let num_weeks = plan.weeks.len();
+    // Generate plan using schedule service
+    let plan_insert = crate::services::schedule::generate_plan(
+        user_id,
+        &race_goal,
+        race_date,
+        None,
+        "road",
+        weekly_km,
+        &training_days,
+        long_run_day,
+        &profile_input,
+    );
 
-            crate::db::plans::deactivate_all(&agent.db, user_id)
-                .await
-                .map_err(|e| super::AgentError::Database(e))?;
-            crate::db::plans::insert(&agent.db, &plan, profile_id, race_date, &race_goal)
-                .await
-                .map_err(|e| super::AgentError::Database(e))?;
+    let plan_id = crate::db::plans::insert_full(&agent.db, &plan_insert)
+        .await
+        .map_err(super::AgentError::Database)?;
 
-            let _ = tx.send(StreamEvent::TextDelta {
-                delta: format!(
-                    "Je trainingsplan is klaar! 🚀\n\n\
-                     📋 {} weken gepland\n\
-                     🎯 Doel: {}\n\n\
-                     Ga naar het 'Plan' tabblad om je schema te bekijken. Succes met trainen! 💪",
-                    num_weeks, race_goal
-                ),
-            }).await;
-            let _ = tx.send(StreamEvent::MessageEnd).await;
-            let _ = tx.send(StreamEvent::PlanUpdated {
-                plan_id: plan.id.to_string(),
-                week: None,
-            }).await;
-        }
-        Err(e) => {
-            tracing::error!("Intake plan generation failed: {}", e);
-            let _ = tx.send(StreamEvent::Error {
-                message: format!("Plan generatie mislukt: {}. Probeer het later opnieuw.", e),
-            }).await;
-        }
-    }
+    let num_weeks = plan_insert.weeks.len();
+
+    let _ = tx.send(StreamEvent::TextDelta {
+        delta: format!(
+            "Je trainingsplan is klaar! 🚀\n\n\
+             📋 {} weken gepland\n\
+             🎯 Doel: {}\n\n\
+             Ga naar het 'Plan' tabblad om je schema te bekijken. Succes met trainen! 💪",
+            num_weeks, race_goal
+        ),
+    }).await;
+    let _ = tx.send(StreamEvent::MessageEnd).await;
+    let _ = tx.send(StreamEvent::PlanUpdated {
+        plan_id: plan_id.to_string(),
+        week: None,
+    }).await;
 
     clear_intake(user_id).await;
     Ok(false)
-}
-
-/// Generate plan for intake (reuses the same AI approach as the plans route).
-async fn generate_plan_for_intake(
-    agent: &CoachAgent,
-    profile: &Profile,
-) -> Result<crate::models::plan::Plan, anyhow::Error> {
-    let profile_json = serde_json::to_string_pretty(profile)?;
-
-    let prompt = format!(
-        r#"Genereer een compleet trainingsschema voor de volgende hardloper. Antwoord ALLEEN met valid JSON, geen uitleg.
-
-PROFIEL:
-{profile_json}
-
-Genereer een Plan object met het volgende JSON format (volg dit EXACT):
-{{
-  "id": "<random uuid>",
-  "user_id": "{user_id}",
-  "weeks": [
-    {{
-      "week_number": 1,
-      "phase": "build_one",
-      "is_recovery": false,
-      "target_km": 25.0,
-      "original_target_km": 25.0,
-      "week_adjustment": 1.0,
-      "days": [
-        {{
-          "weekday": 0,
-          "session_type": "easy",
-          "target_km": 6.0,
-          "adjusted_km": null,
-          "completed": false,
-          "notes": "Rustige duurloop",
-          "feedback": null,
-          "strava_activity_id": null
-        }}
-      ]
-    }}
-  ]
-}}
-
-REGELS:
-- Bereken het aantal weken tot de race datum ({race_date:?})
-- Periodisering: Build I (40%) → Build II (30%) → Peak (15%) → Taper (15%)
-- Elke 3-4 weken een recovery week (is_recovery=true, ~60% volume)
-- Respecteer de trainingsdagen van de loper: {training_days:?}
-- Lange duurloop op: {long_run_day:?}
-- Progressieve overload: max 10% volume toename per week
-- Rustdagen op niet-trainingsdagen (session_type="rest", target_km=0)
-- Notes in het Nederlands
-- id moet een geldige UUID v4 zijn
-- user_id moet "{user_id}" zijn"#,
-        profile_json = profile_json,
-        user_id = profile.user_id,
-        race_date = profile.race_date,
-        training_days = profile.training_days,
-        long_run_day = profile.long_run_day,
-    );
-
-    let response = agent.chat_single(&prompt).await?;
-
-    // Extract JSON from response and sanitize enum values
-    let json_str = extract_json_from_response(&response)?;
-    let json_str = sanitize_plan_json(&json_str);
-    let plan: crate::models::plan::Plan = serde_json::from_str(&json_str)?;
-
-    Ok(plan)
-}
-
-/// Fix common AI mistakes in generated plan JSON — normalize enum values.
-fn sanitize_plan_json(json: &str) -> String {
-    json.replace("\"intervals\"", "\"interval\"")
-        .replace("\"recovery\"", "\"easy\"")
-        .replace("\"threshold\"", "\"tempo\"")
-        .replace("\"long_run\"", "\"long\"")
-        .replace("\"hill\"", "\"tempo\"")
-        .replace("\"fartlek\"", "\"tempo\"")
-        .replace("\"speed\"", "\"interval\"")
-        .replace("\"shakeout\"", "\"easy\"")
-        .replace("\"vo2max\"", "\"interval\"")
-        .replace("\"vo2_max\"", "\"interval\"")
-        .replace("\"warmup\"", "\"easy\"")
-        .replace("\"warm_up\"", "\"easy\"")
-        .replace("\"cooldown\"", "\"easy\"")
-        .replace("\"cool_down\"", "\"easy\"")
-        .replace("\"steady\"", "\"tempo\"")
-        .replace("\"progression\"", "\"tempo\"")
-        .replace("\"strides\"", "\"easy\"")
-        .replace("\"sprint\"", "\"interval\"")
-        .replace("\"build_1\"", "\"build_one\"")
-        .replace("\"build_2\"", "\"build_two\"")
-        .replace("\"build1\"", "\"build_one\"")
-        .replace("\"build2\"", "\"build_two\"")
-        .replace("\"tapering\"", "\"taper\"")
-}
-
-fn extract_json_from_response(text: &str) -> Result<String, anyhow::Error> {
-    if let Some(start) = text.find("```json") {
-        let content = &text[start + 7..];
-        if let Some(end) = content.find("```") {
-            return Ok(content[..end].trim().to_string());
-        }
-    }
-    if let Some(start) = text.find("```") {
-        let content = &text[start + 3..];
-        if let Some(end) = content.find("```") {
-            return Ok(content[..end].trim().to_string());
-        }
-    }
-    if let Some(start) = text.find('{') {
-        if let Some(end) = text.rfind('}') {
-            return Ok(text[start..=end].to_string());
-        }
-    }
-    anyhow::bail!("No JSON found in AI response")
 }
 
 use chrono::Datelike;

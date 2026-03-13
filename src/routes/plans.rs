@@ -3,241 +3,193 @@ use axum::{
     http::StatusCode,
     Json,
 };
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::{
-    agent::CoachAgent,
     auth::Claims,
     db,
-    errors::{AppError, ApiResult},
-    models::profile::Profile,
-    services::schedule::generate_plan as generate_plan_legacy,
+    errors::{ApiResult, AppError},
+    models::plan::GeneratePlanInput,
+    services::schedule,
     AppState,
 };
 
-#[derive(Debug, Deserialize)]
-pub struct GeneratePlanRequest {
-    pub profile: Profile,
-}
-
-#[derive(Debug, Serialize)]
-pub struct GeneratePlanResponse {
-    pub plan_id: Uuid,
-    pub num_weeks: usize,
-    pub plan: crate::models::plan::Plan,
-}
-
-/// POST /api/plans/generate — generate a new personalized training plan using AI.
+/// POST /api/plans/generate — generate a new training plan.
 ///
-/// **Auth:** Bearer JWT required. User must be ≥ 16 years old.
-///
-/// **Request body:** `{ "profile": Profile }` with race goal, training days, etc.
-///
-/// The AI coach agent analyzes the full profile and generates a periodized plan
-/// with appropriate phases (build, peak, taper), session types, and weekly km targets.
-/// Falls back to the legacy algorithm if AI generation fails.
-///
-/// **Response:** 201 with `{ plan_id, num_weeks, plan }`. Deactivates any previous plan.
+/// Accepts a profile JSON (full intake data), generates a normalized plan,
+/// and inserts it into plans + plan_weeks + sessions.
 pub async fn generate(
     State(state): State<AppState>,
     claims: Claims,
-    Json(req): Json<GeneratePlanRequest>,
-) -> ApiResult<(StatusCode, Json<GeneratePlanResponse>)> {
-    let mut profile = req.profile;
-    profile.user_id = claims.sub;
-    profile.id = Uuid::new_v4();
+    Json(input): Json<GeneratePlanInput>,
+) -> ApiResult<(StatusCode, Json<serde_json::Value>)> {
+    // Parse profile fields from the input
+    let profile_val = &input.profile;
 
-    if profile.age_years() < 16 {
-        return Err(AppError::BadRequest(
-            "Je moet minimaal 16 jaar oud zijn om deze app te gebruiken.".into(),
-        ));
+    // Validate age
+    if let Some(dob_str) = profile_val.get("date_of_birth").and_then(|v| v.as_str()) {
+        if let Ok(dob) = dob_str.parse::<chrono::NaiveDate>() {
+            let today = chrono::Local::now().date_naive();
+            let age = today.year() - dob.year()
+                - if today.ordinal() < dob.ordinal() { 1 } else { 0 };
+            if age < 16 {
+                return Err(AppError::BadRequest(
+                    "Je moet minimaal 16 jaar oud zijn om een trainingsplan te genereren.".into(),
+                ));
+            }
+        }
     }
 
-    // Try AI-generated plan first, fall back to legacy algorithm
-    let plan = match generate_plan_ai(&state, &profile).await {
-        Ok(plan) => {
-            tracing::info!("AI generated plan for user {}", claims.sub);
-            plan
-        }
-        Err(e) => {
-            tracing::warn!("AI plan generation failed, falling back to legacy: {}", e);
-            generate_plan_legacy(&profile)
-        }
+    // Upsert profile
+    let profile_input = crate::models::profile::ProfileInput {
+        name: profile_val
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Runner")
+            .to_string(),
+        date_of_birth: profile_val
+            .get("date_of_birth")
+            .and_then(|v| v.as_str())
+            .and_then(|s| s.parse().ok())
+            .unwrap_or_else(|| chrono::NaiveDate::from_ymd_opt(1990, 1, 1).unwrap()),
+        gender: profile_val
+            .get("gender")
+            .and_then(|v| v.as_str())
+            .unwrap_or("other")
+            .to_string(),
+        running_experience: profile_val
+            .get("running_years")
+            .or_else(|| profile_val.get("running_experience"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        weekly_km: profile_val
+            .get("weekly_km")
+            .and_then(|v| v.as_f64())
+            .map(|v| v as f32),
+        time_5k: profile_val.get("time_5k").and_then(|v| v.as_str()).map(|s| s.to_string()),
+        time_10k: profile_val.get("time_10k").and_then(|v| v.as_str()).map(|s| s.to_string()),
+        time_half: profile_val.get("time_half_marathon").and_then(|v| v.as_str()).map(|s| s.to_string()),
+        time_marathon: profile_val.get("time_marathon").and_then(|v| v.as_str()).map(|s| s.to_string()),
+        rest_hr: profile_val.get("rest_hr").and_then(|v| v.as_i64()).map(|v| v as i16),
+        max_hr: profile_val.get("max_hr").and_then(|v| v.as_i64()).map(|v| v as i16),
+        sleep_quality: profile_val.get("sleep_hours").and_then(|v| v.as_str()).map(|s| s.to_string()),
+        complaints: profile_val.get("complaints").and_then(|v| v.as_str()).map(|s| s.to_string()),
     };
+    db::profiles::upsert(&state.db, claims.sub, &profile_input)
+        .await
+        .map_err(AppError::Database)?;
 
-    let profile_id = db::profiles::upsert(&state.db, &profile).await?;
-    let race_date = profile.race_date;
-    let race_goal = format!("{:?}", profile.race_goal);
+    // Upsert training preferences
+    let training_days: Vec<i16> = profile_val
+        .get("training_days")
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.iter().filter_map(|v| v.as_i64().map(|n| n as i16)).collect())
+        .unwrap_or_else(|| vec![1, 3, 5]);
+    let long_run_day = profile_val
+        .get("long_run_day")
+        .and_then(|v| v.as_i64())
+        .map(|v| v as i16);
+    let strength_days: Option<Vec<i16>> = profile_val
+        .get("strength_days")
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.iter().filter_map(|v| v.as_i64().map(|n| n as i16)).collect());
+    let max_dur = profile_val.get("max_duration_per_day").cloned();
 
-    db::plans::deactivate_all(&state.db, profile.user_id).await?;
-    db::plans::insert(&state.db, &plan, profile_id, race_date, &race_goal).await?;
+    let prefs_input = crate::models::training_preferences::TrainingPreferencesInput {
+        training_days: training_days.clone(),
+        long_run_day,
+        strength_days,
+        max_duration_per_day: max_dur,
+        terrain: profile_val.get("terrain").and_then(|v| v.as_str()).map(|s| s.to_string()),
+    };
+    db::training_preferences::upsert(&state.db, claims.sub, &prefs_input)
+        .await
+        .map_err(AppError::Database)?;
 
-    let num_weeks = plan.weeks.len();
-    Ok((StatusCode::CREATED, Json(GeneratePlanResponse { plan_id: plan.id, num_weeks, plan })))
-}
+    // Generate the plan using the schedule service
+    let race_goal = profile_val
+        .get("race_goal")
+        .and_then(|v| v.as_str())
+        .unwrap_or("marathon")
+        .to_string();
+    let race_date = profile_val
+        .get("race_date")
+        .and_then(|v| v.as_str())
+        .and_then(|s| s.parse::<chrono::NaiveDate>().ok());
+    let race_time_goal = profile_val
+        .get("race_time_goal")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let terrain = profile_val
+        .get("terrain")
+        .and_then(|v| v.as_str())
+        .unwrap_or("road")
+        .to_string();
+    let weekly_km = profile_val
+        .get("weekly_km")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(40.0) as f32;
 
-/// Use the AI coach agent to generate a training plan from a profile.
-async fn generate_plan_ai(
-    state: &AppState,
-    profile: &Profile,
-) -> Result<crate::models::plan::Plan, anyhow::Error> {
-    let agent = CoachAgent::new(
-        state.db.clone(),
-        state.config.clone(),
-        state.http.clone(),
+    let plan_insert = schedule::generate_plan(
+        claims.sub,
+        &race_goal,
+        race_date,
+        race_time_goal.as_deref(),
+        &terrain,
+        weekly_km,
+        &training_days,
+        long_run_day.unwrap_or(6),
+        &profile_input,
     );
 
-    let profile_json = serde_json::to_string_pretty(profile)?;
+    let plan_id = db::plans::insert_full(&state.db, &plan_insert)
+        .await
+        .map_err(AppError::Database)?;
 
-    let prompt = format!(
-        r#"Genereer een compleet trainingsschema voor de volgende hardloper. Antwoord ALLEEN met valid JSON, geen uitleg.
+    // Fetch the plan to return
+    let plan = db::plans::fetch_by_id(&state.db, plan_id, claims.sub)
+        .await
+        .map_err(AppError::Database)?
+        .ok_or_else(|| AppError::NotFound("Plan not found after insert".into()))?;
 
-PROFIEL:
-{profile_json}
-
-Genereer een Plan object met het volgende JSON format (volg dit EXACT):
-{{
-  "id": "<random uuid>",
-  "user_id": "{user_id}",
-  "weeks": [
-    {{
-      "week_number": 1,
-      "phase": "build_one",   // "build_one" | "build_two" | "peak" | "taper"
-      "is_recovery": false,
-      "target_km": 25.0,
-      "original_target_km": 25.0,
-      "week_adjustment": 1.0,
-      "days": [
-        {{
-          "weekday": 0,          // 0=maandag .. 6=zondag
-          "session_type": "easy", // "easy" | "tempo" | "long" | "interval" | "hike" | "rest" | "cross" | "race"
-          "target_km": 6.0,
-          "adjusted_km": null,
-          "completed": false,
-          "notes": "Rustige duurloop, houd het ontspannen",
-          "feedback": null,
-          "strava_activity_id": null
-        }}
-      ]
-    }}
-  ]
-}}
-
-REGELS:
-- Bereken het aantal weken tot de race datum ({race_date:?})
-- Periodisering: Build I (40%) → Build II (30%) → Peak (15%) → Taper (15%)
-- Elke 3-4 weken een recovery week (is_recovery=true, ~60% volume)
-- Respecteer de trainingsdagen van de loper: {training_days:?}
-- Lange duurloop op: {long_run_day:?}
-- Krachttraining dagen: {strength_days:?}
-- Progressieve overload: max 10% volume toename per week
-- Rustdagen op niet-trainingsdagen (session_type="rest", target_km=0)
-- Notes in het Nederlands, kort en specifiek per sessie
-- Pas het niveau aan op basis van ervaring ({experience_years} jaar) en huidige wekelijkse km ({weekly_km} km)
-- Houd rekening met blessuregeschiedenis: {health_notes:?}
-- id moet een geldige UUID v4 zijn
-- user_id moet "{user_id}" zijn"#,
-        profile_json = profile_json,
-        user_id = profile.user_id,
-        race_date = profile.race_date,
-        training_days = profile.training_days,
-        long_run_day = profile.long_run_day,
-        strength_days = profile.strength_days,
-        experience_years = format!("{:?}", profile.running_years),
-        weekly_km = profile.weekly_km,
-        health_notes = profile.complaints.as_deref().unwrap_or("geen"),
-    );
-
-    let response = agent.chat_single(&prompt).await?;
-
-    // Extract JSON from response (might be wrapped in ```json ... ```)
-    let json_str = extract_json(&response)?;
-    let json_str = sanitize_plan_json(&json_str);
-    let plan: crate::models::plan::Plan = serde_json::from_str(&json_str)?;
-
-    Ok(plan)
+    Ok((
+        StatusCode::CREATED,
+        Json(serde_json::json!({
+            "plan_id": plan_id,
+            "num_weeks": plan.weeks.len(),
+            "plan": plan,
+        })),
+    ))
 }
 
-/// Extract JSON from a response that might contain markdown code blocks.
-fn extract_json(text: &str) -> Result<String, anyhow::Error> {
-    // Try to find ```json ... ``` block
-    if let Some(start) = text.find("```json") {
-        let content = &text[start + 7..];
-        if let Some(end) = content.find("```") {
-            return Ok(content[..end].trim().to_string());
-        }
-    }
-    // Try to find ``` ... ``` block
-    if let Some(start) = text.find("```") {
-        let content = &text[start + 3..];
-        if let Some(end) = content.find("```") {
-            return Ok(content[..end].trim().to_string());
-        }
-    }
-    // Try raw JSON (starts with {)
-    if let Some(start) = text.find('{') {
-        if let Some(end) = text.rfind('}') {
-            return Ok(text[start..=end].to_string());
-        }
-    }
-    anyhow::bail!("No JSON found in AI response")
-}
+use chrono::Datelike;
 
-/// Fix common AI mistakes in generated plan JSON — normalize enum values.
-fn sanitize_plan_json(json: &str) -> String {
-    json.replace("\"intervals\"", "\"interval\"")
-        .replace("\"recovery\"", "\"easy\"")
-        .replace("\"threshold\"", "\"tempo\"")
-        .replace("\"long_run\"", "\"long\"")
-        .replace("\"hill\"", "\"tempo\"")
-        .replace("\"fartlek\"", "\"tempo\"")
-        .replace("\"speed\"", "\"interval\"")
-        .replace("\"shakeout\"", "\"easy\"")
-        .replace("\"vo2max\"", "\"interval\"")
-        .replace("\"vo2_max\"", "\"interval\"")
-        .replace("\"warmup\"", "\"easy\"")
-        .replace("\"warm_up\"", "\"easy\"")
-        .replace("\"cooldown\"", "\"easy\"")
-        .replace("\"cool_down\"", "\"easy\"")
-        .replace("\"steady\"", "\"tempo\"")
-        .replace("\"progression\"", "\"tempo\"")
-        .replace("\"strides\"", "\"easy\"")
-        .replace("\"sprint\"", "\"interval\"")
-        .replace("\"build_1\"", "\"build_one\"")
-        .replace("\"build_2\"", "\"build_two\"")
-        .replace("\"build1\"", "\"build_one\"")
-        .replace("\"build2\"", "\"build_two\"")
-        .replace("\"tapering\"", "\"taper\"")
-}
-
-/// GET /api/plans — returns the authenticated user's active training plan.
-///
-/// **Auth:** Bearer JWT required.
-///
-/// **Response:** 200 with the full `Plan` JSON, or 404 if no active plan exists.
+/// GET /api/plans — get the user's active plan.
 pub async fn get_active(
     State(state): State<AppState>,
     claims: Claims,
-) -> ApiResult<Json<crate::models::plan::Plan>> {
-    db::plans::fetch_active(&state.db, claims.sub)
-        .await?
-        .map(Json)
-        .ok_or_else(|| AppError::NotFound("No active plan found".into()))
+) -> ApiResult<Json<serde_json::Value>> {
+    let plan = db::plans::fetch_active(&state.db, claims.sub)
+        .await
+        .map_err(AppError::Database)?;
+
+    match plan {
+        Some(p) => Ok(Json(serde_json::to_value(p).unwrap())),
+        None => Err(AppError::NotFound("No active plan found".into())),
+    }
 }
 
-/// GET /api/plans/:plan_id — returns a specific plan by ID (scoped to the authenticated user).
-///
-/// **Auth:** Bearer JWT required. Returns 404 if the plan belongs to another user.
-///
-/// **Response:** 200 with the full `Plan` JSON.
+/// GET /api/plans/:plan_id — get a plan by ID.
 pub async fn get_by_id(
     State(state): State<AppState>,
     claims: Claims,
     Path(plan_id): Path<Uuid>,
-) -> ApiResult<Json<crate::models::plan::Plan>> {
-    db::plans::fetch_by_id(&state.db, plan_id, claims.sub)
-        .await?
-        .map(Json)
-        .ok_or_else(|| AppError::NotFound(format!("Plan {} not found", plan_id)))
+) -> ApiResult<Json<serde_json::Value>> {
+    let plan = db::plans::fetch_by_id(&state.db, plan_id, claims.sub)
+        .await
+        .map_err(AppError::Database)?
+        .ok_or_else(|| AppError::NotFound(format!("Plan {} not found", plan_id)))?;
+
+    Ok(Json(serde_json::to_value(plan).unwrap()))
 }

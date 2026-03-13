@@ -1,19 +1,17 @@
-pub mod coach;
-pub mod feedback;
+pub mod activities;
 pub mod injuries;
 pub mod oauth_sessions;
 pub mod plans;
 pub mod profiles;
 pub mod strava;
+pub mod training_preferences;
 pub mod users;
 
-use sqlx::PgPool;
+pub type Db = sqlx::PgPool;
 
-pub type Db = PgPool;
-
-pub async fn connect(database_url: &str) -> Result<Db, sqlx::Error> {
+pub async fn connect(url: &str) -> Result<Db, sqlx::Error> {
     sqlx::postgres::PgPoolOptions::new()
         .max_connections(10)
-        .connect(database_url)
+        .connect(url)
         .await
 }

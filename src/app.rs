@@ -128,10 +128,10 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/plans/generate", post(routes::plans::generate))
         .route("/api/plans",          get(routes::plans::get_active))
         .route("/api/plans/:plan_id", get(routes::plans::get_by_id))
-        // Session feedback (protected)
+        // Session advice + completion (protected)
         .route(
             "/api/plans/:plan_id/weeks/:week/days/:weekday/complete",
-            post(routes::feedback::complete_day),
+            post(routes::sessions::complete_session),
         )
         .route(
             "/api/plans/:plan_id/weeks/:week/days/:weekday/advice",
@@ -139,8 +139,14 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route(
             "/api/plans/:plan_id/weeks/:week/days/:weekday/uncomplete",
-            post(routes::sessions::uncomplete_day),
+            post(routes::sessions::uncomplete_session),
         )
+        // Activities (protected)
+        .route(
+            "/api/activities",
+            post(routes::activities::create_activity).get(routes::activities::list_activities),
+        )
+        .route("/api/activities/:id", get(routes::activities::get_activity))
         // Injuries (protected)
         .route(
             "/api/injuries",
@@ -155,6 +161,10 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/strava/activities",    get(routes::strava::activities))
         // Profile (protected)
         .route("/api/profiles/me", get(routes::profiles::me).patch(routes::profiles::update_me))
+        .route(
+            "/api/profiles/me/preferences",
+            get(routes::profiles::get_preferences).put(routes::profiles::update_preferences),
+        )
         // Coach (protected) — legacy REST endpoint
         .route(
             "/api/coach",

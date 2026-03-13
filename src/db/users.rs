@@ -259,9 +259,9 @@ pub async fn fetch_stats(db: &PgPool) -> Result<serde_json::Value, sqlx::Error> 
         .fetch_one(db).await?;
     let (active_plans,) = sqlx::query_as::<_, (i64,)>("SELECT COUNT(*) FROM plans WHERE active = true")
         .fetch_one(db).await?;
-    let (total_injuries,) = sqlx::query_as::<_, (i64,)>("SELECT COUNT(*) FROM injury_reports")
+    let (total_injuries,) = sqlx::query_as::<_, (i64,)>("SELECT COUNT(*) FROM injuries")
         .fetch_one(db).await?;
-    let (active_injuries,) = sqlx::query_as::<_, (i64,)>("SELECT COUNT(*) FROM injury_reports WHERE recovery_status = 'active'")
+    let (active_injuries,) = sqlx::query_as::<_, (i64,)>("SELECT COUNT(*) FROM injuries WHERE status != 'resolved'")
         .fetch_one(db).await?;
     let (new_users_7d,) = sqlx::query_as::<_, (i64,)>("SELECT COUNT(*) FROM users WHERE created_at > NOW() - INTERVAL '7 days'")
         .fetch_one(db).await?;

@@ -3,177 +3,112 @@ use axum::{
     http::StatusCode,
     Json,
 };
-use chrono::Local;
-use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
     auth::Claims,
     db,
-    errors::{AppError, ApiResult},
-    models::injury::{BodyLocation, InjuryReport, RecoveryStatus},
-    services::injury::{adapt_plan_for_injury, estimated_recovery_weeks},
+    errors::{ApiResult, AppError},
+    models::injury::{estimated_recovery_weeks, InjuryInput, Injury},
+    services::injury as injury_service,
     AppState,
 };
 
-#[derive(Debug, Deserialize)]
-pub struct ReportInjuryRequest {
-    pub locations: Vec<BodyLocation>,
-    pub severity: u8,
-    pub can_walk: bool,
-    pub can_run: bool,
-    pub description: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct ReportInjuryResponse {
-    pub injury_id: Uuid,
-    pub plan_adapted: bool,
-    pub recovery_weeks: u8,
-}
-
-#[derive(Debug, Serialize)]
-pub struct InjuryListItem {
-    pub id: Uuid,
-    pub severity: i16,
-    pub can_run: bool,
-    pub recovery_status: String,
-    pub reported_at: chrono::NaiveDate,
-    pub description: Option<String>,
-}
-
 /// POST /api/injuries — report a new injury.
-///
-/// **Auth:** Bearer JWT required.
-///
-/// **Request body:** `{ locations: [BodyLocation], severity: 1-10, can_walk: bool, can_run: bool, description?: string }`.
-///
-/// **Response:** 201 with `{ injury_id, plan_adapted: bool, recovery_weeks }`.
-/// If an active plan exists, it is automatically adapted for the injury.
 pub async fn report_injury(
     State(state): State<AppState>,
     claims: Claims,
-    Json(req): Json<ReportInjuryRequest>,
-) -> ApiResult<(StatusCode, Json<ReportInjuryResponse>)> {
-    if req.severity < 1 || req.severity > 10 {
-        return Err(AppError::BadRequest("severity must be between 1 and 10".into()));
+    Json(input): Json<InjuryInput>,
+) -> ApiResult<(StatusCode, Json<serde_json::Value>)> {
+    // Validate severity
+    if input.severity < 1 || input.severity > 10 {
+        return Err(AppError::BadRequest("Severity must be between 1 and 10".into()));
     }
 
-    let injury = InjuryReport {
-        id: Uuid::new_v4(),
+    let injury_id = db::injuries::insert(&state.db, claims.sub, &input)
+        .await
+        .map_err(AppError::Database)?;
+
+    // Try to adapt the active plan
+    let plan_adapted = match db::plans::fetch_active(&state.db, claims.sub).await {
+        Ok(Some(plan)) => {
+            // Build a temporary Injury for adaptation logic
+            let injury = Injury {
+                id: injury_id,
+                user_id: claims.sub,
+                locations: input.locations.clone(),
+                severity: input.severity,
+                can_walk: input.can_walk,
+                can_run: input.can_run,
+                description: input.description.clone(),
+                status: "active".into(),
+                reported_at: chrono::Local::now().date_naive(),
+                resolved_at: None,
+            };
+            injury_service::adapt_plan_for_injury(&state.db, &plan, &injury).await.unwrap_or(false)
+        }
+        _ => false,
+    };
+
+    let injury = Injury {
+        id: injury_id,
         user_id: claims.sub,
-        reported_at: Local::now().date_naive(),
-        locations: req.locations,
-        severity: req.severity,
-        can_walk: req.can_walk,
-        can_run: req.can_run,
-        description: req.description,
-        recovery_status: RecoveryStatus::Active,
+        locations: input.locations,
+        severity: input.severity,
+        can_walk: input.can_walk,
+        can_run: input.can_run,
+        description: input.description,
+        status: "active".into(),
+        reported_at: chrono::Local::now().date_naive(),
+        resolved_at: None,
     };
-
-    // Fetch active plan with metadata so we can calculate the current week
-    let plan_meta = db::plans::fetch_active_with_meta(&state.db, claims.sub).await?;
-
-    let injury_id = db::injuries::insert(
-        &state.db,
-        &injury,
-        plan_meta.as_ref().map(|m| m.plan.id),
-    )
-    .await?;
-
-    let plan_adapted = if let Some(mut meta) = plan_meta {
-        let plan_start = meta.created_at.date_naive();
-        let today = Local::now().date_naive();
-        let weeks_elapsed = (today - plan_start).num_weeks() as u8;
-        let current_week = (weeks_elapsed + 1).clamp(1, meta.plan.weeks.len() as u8);
-
-        adapt_plan_for_injury(&mut meta.plan, &injury, current_week);
-        db::plans::update_weeks(&state.db, meta.plan.id, &meta.plan.weeks).await?;
-        true
-    } else {
-        false
-    };
-
     let recovery_weeks = estimated_recovery_weeks(&injury);
 
-    Ok((StatusCode::CREATED, Json(ReportInjuryResponse { injury_id, plan_adapted, recovery_weeks })))
+    Ok((
+        StatusCode::CREATED,
+        Json(serde_json::json!({
+            "injury_id": injury_id,
+            "plan_adapted": plan_adapted,
+            "recovery_weeks": recovery_weeks,
+        })),
+    ))
 }
 
-/// GET /api/injuries — list all active (unresolved) injuries for the authenticated user.
-///
-/// **Auth:** Bearer JWT required.
-///
-/// **Response:** 200 with JSON array of `InjuryListItem`.
+/// GET /api/injuries — list active injuries.
 pub async fn list_injuries(
     State(state): State<AppState>,
     claims: Claims,
-) -> ApiResult<Json<Vec<InjuryListItem>>> {
-    let rows = db::injuries::fetch_active(&state.db, claims.sub).await?;
-
-    let items = rows.into_iter().map(|r| InjuryListItem {
-        id: r.id,
-        severity: r.severity,
-        can_run: r.can_run,
-        recovery_status: r.recovery_status,
-        reported_at: r.reported_at,
-        description: r.description,
-    }).collect();
-
-    Ok(Json(items))
+) -> ApiResult<Json<Vec<Injury>>> {
+    let injuries = db::injuries::list_active(&state.db, claims.sub)
+        .await
+        .map_err(AppError::Database)?;
+    Ok(Json(injuries))
 }
 
-#[derive(Debug, Serialize)]
-pub struct InjuryHistoryItem {
-    pub id: Uuid,
-    pub severity: i16,
-    pub can_run: bool,
-    pub recovery_status: String,
-    pub reported_at: chrono::NaiveDate,
-    pub resolved_at: Option<chrono::NaiveDate>,
-    pub locations: Vec<String>,
-    pub description: Option<String>,
-}
-
-/// GET /api/injuries/history — full injury history including resolved injuries.
-///
-/// **Auth:** Bearer JWT required.
-///
-/// **Response:** 200 with JSON array of `InjuryHistoryItem`.
+/// GET /api/injuries/history — list all injuries.
 pub async fn injury_history(
     State(state): State<AppState>,
     claims: Claims,
-) -> ApiResult<Json<Vec<InjuryHistoryItem>>> {
-    let rows = db::injuries::fetch_history(&state.db, claims.sub).await?;
-
-    let items = rows.into_iter().map(|r| InjuryHistoryItem {
-        id: r.id,
-        severity: r.severity,
-        can_run: r.can_run,
-        recovery_status: r.recovery_status,
-        reported_at: r.reported_at,
-        resolved_at: r.resolved_at,
-        locations: r.locations,
-        description: r.description,
-    }).collect();
-
-    Ok(Json(items))
+) -> ApiResult<Json<Vec<Injury>>> {
+    let injuries = db::injuries::list_all(&state.db, claims.sub)
+        .await
+        .map_err(AppError::Database)?;
+    Ok(Json(injuries))
 }
 
-/// PATCH /api/injuries/:id/resolve — mark an injury as resolved.
-///
-/// **Auth:** Bearer JWT required. Injury must belong to the authenticated user.
-///
-/// **Response:** 204 No Content on success, 404 if not found or already resolved.
+/// PATCH /api/injuries/:id/resolve — resolve an injury.
 pub async fn resolve_injury(
     State(state): State<AppState>,
     claims: Claims,
     Path(injury_id): Path<Uuid>,
 ) -> ApiResult<StatusCode> {
-    let updated = db::injuries::resolve_by_user(&state.db, injury_id, claims.sub).await?;
+    let resolved = db::injuries::resolve(&state.db, injury_id, claims.sub)
+        .await
+        .map_err(AppError::Database)?;
 
-    if updated {
+    if resolved {
         Ok(StatusCode::NO_CONTENT)
     } else {
-        Err(AppError::NotFound(format!("Injury {} not found or already resolved", injury_id)))
+        Err(AppError::NotFound("Injury not found or already resolved".into()))
     }
 }

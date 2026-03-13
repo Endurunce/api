@@ -18,14 +18,15 @@ pub async fn list(
     State(state): State<AppState>,
     claims: Claims,
 ) -> Result<Json<Vec<ConversationMessageResponse>>, AppError> {
-    let messages = memory::load_history(&state.db, claims.sub, 40).await
+    let messages = memory::load_history(&state.db, claims.sub, 40)
+        .await
         .map_err(|e| AppError::Internal(anyhow::anyhow!("{}", e)))?;
 
     let response: Vec<ConversationMessageResponse> = messages
         .into_iter()
         .map(|m| ConversationMessageResponse {
             role: m.role,
-            content: m.content.as_str().unwrap_or("").to_string(),
+            content: m.content,
         })
         .collect();
 

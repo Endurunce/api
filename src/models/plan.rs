@@ -1,244 +1,217 @@
+use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-use super::feedback::Feedback;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Plan metadata matching the `plans` table.
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct Plan {
     pub id: Uuid,
     pub user_id: Uuid,
-    pub weeks: Vec<Week>,
+    pub race_goal: String,
+    pub race_goal_km: Option<f32>,
+    pub race_time_goal: Option<String>,
+    pub race_date: Option<NaiveDate>,
+    pub terrain: String,
+    pub num_weeks: i16,
+    pub start_km: f32,
+    pub active: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Week {
-    pub week_number: u8,
-    pub phase: Phase,
+/// A week in a plan, matching `plan_weeks` table.
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct PlanWeek {
+    pub id: Uuid,
+    pub plan_id: Uuid,
+    pub week_number: i16,
+    pub phase: String,
+    pub target_km: f32,
     pub is_recovery: bool,
-    pub target_km: f32,
-    pub original_target_km: f32,
-    pub week_adjustment: f32,
-    pub days: Vec<Day>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "snake_case")]
-pub enum Phase {
-    BuildOne,
-    BuildTwo,
-    Peak,
-    Taper,
-}
-
-impl Phase {
-    pub fn label(&self) -> &'static str {
-        match self {
-            Phase::BuildOne => "Opbouw I",
-            Phase::BuildTwo => "Opbouw II",
-            Phase::Peak     => "Piek",
-            Phase::Taper    => "Tapering",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Day {
-    pub weekday: u8,       // 0=Mon..6=Sun
-    pub session_type: SessionType,
-    pub target_km: f32,
-    pub adjusted_km: Option<f32>,
-    pub completed: bool,
     pub notes: Option<String>,
-    pub feedback: Option<Feedback>,
-    pub strava_activity_id: Option<String>,
 }
 
-impl Day {
-    pub fn effective_km(&self) -> f32 {
-        self.adjusted_km.unwrap_or(self.target_km)
+/// A training session, matching `sessions` table.
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct Session {
+    pub id: Uuid,
+    pub plan_week_id: Uuid,
+    pub user_id: Uuid,
+    pub weekday: i16,
+    pub session_type: String,
+    pub target_km: f32,
+    pub target_duration_min: Option<i16>,
+    pub target_hr_zones: Option<Vec<i16>>,
+    pub notes: Option<String>,
+    pub sort_order: i16,
+}
+
+/// Full plan with weeks and sessions (assembled from JOINs).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FullPlan {
+    #[serde(flatten)]
+    pub plan: Plan,
+    pub weeks: Vec<FullWeek>,
+}
+
+/// A week with its sessions.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FullWeek {
+    #[serde(flatten)]
+    pub week: PlanWeek,
+    pub sessions: Vec<Session>,
+}
+
+/// Input for generating a plan.
+#[derive(Debug, Deserialize)]
+pub struct GeneratePlanInput {
+    pub profile: serde_json::Value,
+}
+
+/// Input for creating a plan (from schedule generator or AI).
+#[derive(Debug, Clone)]
+pub struct PlanInsert {
+    pub user_id: Uuid,
+    pub race_goal: String,
+    pub race_goal_km: Option<f32>,
+    pub race_time_goal: Option<String>,
+    pub race_date: Option<NaiveDate>,
+    pub terrain: String,
+    pub start_km: f32,
+    pub weeks: Vec<WeekInsert>,
+}
+
+/// Input for inserting a week.
+#[derive(Debug, Clone)]
+pub struct WeekInsert {
+    pub week_number: i16,
+    pub phase: String,
+    pub target_km: f32,
+    pub is_recovery: bool,
+    pub notes: Option<String>,
+    pub sessions: Vec<SessionInsert>,
+}
+
+/// Input for inserting a session.
+#[derive(Debug, Clone)]
+pub struct SessionInsert {
+    pub weekday: i16,
+    pub session_type: String,
+    pub target_km: f32,
+    pub target_duration_min: Option<i16>,
+    pub target_hr_zones: Option<Vec<i16>>,
+    pub notes: Option<String>,
+    pub sort_order: i16,
+}
+
+// ── Helper methods ─────────────────────────────────────────────────────────────
+
+/// Check if a session type is a running type.
+pub fn is_running_type(session_type: &str) -> bool {
+    matches!(
+        session_type,
+        "easy" | "tempo" | "long" | "interval" | "race" | "hike"
+    )
+}
+
+/// Get the distance for a race goal string.
+pub fn race_goal_distance_km(goal: &str) -> f32 {
+    match goal {
+        "5k" => 5.0,
+        "10k" => 10.0,
+        "half_marathon" => 21.1,
+        "marathon" => 42.2,
+        "sub3_marathon" => 42.2,
+        "50k" => 50.0,
+        "100k" => 100.0,
+        _ => 42.2,
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "snake_case")]
-pub enum SessionType {
-    Easy,
-    Tempo,
-    Long,
-    Interval,
-    Hike,
-    Rest,
-    Cross,
-    Race,
-}
-
-impl SessionType {
-    pub fn label(&self) -> &'static str {
-        match self {
-            SessionType::Easy     => "Rustige duurloop",
-            SessionType::Tempo    => "Tempoloup",
-            SessionType::Long     => "Lange duurloop",
-            SessionType::Interval => "Intervaltraining",
-            SessionType::Hike     => "Wandel/Trail mix",
-            SessionType::Rest     => "Rustdag",
-            SessionType::Cross    => "Crosstraining",
-            SessionType::Race     => "Race Day",
-        }
-    }
-
-    pub fn emoji(&self) -> &'static str {
-        match self {
-            SessionType::Easy     => "🌿",
-            SessionType::Tempo    => "🔥",
-            SessionType::Long     => "🏞️",
-            SessionType::Interval => "⚡",
-            SessionType::Hike     => "🥾",
-            SessionType::Rest     => "☁️",
-            SessionType::Cross    => "🚴",
-            SessionType::Race     => "🏆",
-        }
-    }
-
-    /// Minutes per km — used to convert max duration to km cap
-    pub fn pace_min_per_km(&self) -> Option<f32> {
-        match self {
-            SessionType::Easy     => Some(6.5),
-            SessionType::Tempo    => Some(5.0),
-            SessionType::Long     => Some(6.5),
-            SessionType::Interval => Some(5.5),
-            SessionType::Hike     => Some(8.0),
-            SessionType::Rest | SessionType::Cross | SessionType::Race => None,
-        }
-    }
-
-    /// Target HR zones (zone numbers, 1-based)
-    pub fn target_zones(&self) -> &'static [u8] {
-        match self {
-            SessionType::Easy | SessionType::Long | SessionType::Hike | SessionType::Cross => &[1, 2],
-            SessionType::Tempo    => &[3],
-            SessionType::Interval => &[4, 5],
-            SessionType::Race     => &[2, 3],
-            SessionType::Rest     => &[],
-        }
-    }
-
-    pub fn is_running(&self) -> bool {
-        !matches!(self, SessionType::Rest | SessionType::Cross)
+/// Get peak weekly km for a race goal.
+pub fn race_goal_peak_km(goal: &str) -> f32 {
+    match goal {
+        "5k" => 35.0,
+        "10k" => 45.0,
+        "half_marathon" => 55.0,
+        "marathon" | "sub3_marathon" => 70.0,
+        "50k" => 80.0,
+        "100k" => 95.0,
+        _ => 70.0,
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn make_day(session_type: SessionType, target_km: f32, adjusted_km: Option<f32>) -> Day {
-        Day {
-            weekday: 0,
-            session_type,
-            target_km,
-            adjusted_km,
-            completed: false,
-            notes: None,
-            feedback: None,
-            strava_activity_id: None,
-        }
+/// Get min/max weeks for a race goal.
+pub fn race_goal_min_weeks(goal: &str) -> u8 {
+    match goal {
+        "5k" => 6,
+        "10k" => 8,
+        "half_marathon" => 10,
+        "marathon" | "sub3_marathon" => 12,
+        "50k" | "100k" => 16,
+        _ => 12,
     }
+}
 
-    // ── Day ──────────────────────────────────────────────────────────────────
-
-    #[test]
-    fn effective_km_uses_adjusted_when_set() {
-        let day = make_day(SessionType::Easy, 10.0, Some(8.0));
-        assert_eq!(day.effective_km(), 8.0);
+pub fn race_goal_max_weeks(goal: &str) -> u8 {
+    match goal {
+        "5k" => 12,
+        "10k" => 16,
+        "half_marathon" => 20,
+        "marathon" | "sub3_marathon" => 24,
+        "50k" | "100k" => 30,
+        _ => 24,
     }
+}
 
-    #[test]
-    fn effective_km_falls_back_to_target() {
-        let day = make_day(SessionType::Easy, 10.0, None);
-        assert_eq!(day.effective_km(), 10.0);
+/// Check if goal is a speed goal.
+pub fn is_speed_goal(goal: &str) -> bool {
+    matches!(goal, "sub3_marathon")
+}
+
+/// Check if goal is ultra.
+pub fn is_ultra(goal: &str) -> bool {
+    matches!(goal, "50k" | "100k")
+}
+
+/// Check if goal is marathon or longer.
+pub fn is_marathon_or_longer(goal: &str) -> bool {
+    matches!(goal, "marathon" | "sub3_marathon" | "50k" | "100k")
+}
+
+/// Get phase label for display.
+pub fn phase_label(phase: &str) -> &str {
+    match phase {
+        "build_1" => "Opbouw 1",
+        "build_2" => "Opbouw 2",
+        "peak" => "Piek",
+        "taper" => "Taper",
+        "recovery" => "Herstel",
+        _ => phase,
     }
+}
 
-    #[test]
-    fn effective_km_adjusted_zero_is_respected() {
-        let day = make_day(SessionType::Easy, 10.0, Some(0.0));
-        assert_eq!(day.effective_km(), 0.0);
+/// Get session type label.
+pub fn session_type_label(session_type: &str) -> &str {
+    match session_type {
+        "easy" => "Easy",
+        "tempo" => "Tempo",
+        "long" => "Lange duurloop",
+        "interval" => "Interval",
+        "rest" => "Rust",
+        "cross" => "Crosstraining",
+        "hike" => "Hike",
+        "race" => "Race",
+        "strength" => "Kracht",
+        _ => session_type,
     }
+}
 
-    // ── SessionType ──────────────────────────────────────────────────────────
-
-    #[test]
-    fn rest_and_cross_are_not_running() {
-        assert!(!SessionType::Rest.is_running());
-        assert!(!SessionType::Cross.is_running());
-    }
-
-    #[test]
-    fn all_other_types_are_running() {
-        for t in [
-            SessionType::Easy, SessionType::Tempo, SessionType::Long,
-            SessionType::Interval, SessionType::Hike, SessionType::Race,
-        ] {
-            assert!(t.is_running(), "{t:?} should be considered running");
-        }
-    }
-
-    #[test]
-    fn pace_is_none_for_non_running_types() {
-        assert!(SessionType::Rest.pace_min_per_km().is_none());
-        assert!(SessionType::Cross.pace_min_per_km().is_none());
-        assert!(SessionType::Race.pace_min_per_km().is_none());
-    }
-
-    #[test]
-    fn pace_is_some_for_running_types() {
-        for t in [
-            SessionType::Easy, SessionType::Tempo, SessionType::Long,
-            SessionType::Interval, SessionType::Hike,
-        ] {
-            assert!(t.pace_min_per_km().is_some(), "{t:?} should have a pace");
-            assert!(t.pace_min_per_km().unwrap() > 0.0, "{t:?} pace must be positive");
-        }
-    }
-
-    #[test]
-    fn tempo_is_faster_than_easy() {
-        let tempo = SessionType::Tempo.pace_min_per_km().unwrap();
-        let easy  = SessionType::Easy.pace_min_per_km().unwrap();
-        assert!(tempo < easy, "tempo pace should be faster (lower min/km) than easy");
-    }
-
-    #[test]
-    fn target_zones_not_empty_for_running() {
-        for t in [
-            SessionType::Easy, SessionType::Tempo, SessionType::Long,
-            SessionType::Interval, SessionType::Hike, SessionType::Race,
-        ] {
-            assert!(!t.target_zones().is_empty(), "{t:?} should have target zones");
-        }
-    }
-
-    #[test]
-    fn rest_has_no_target_zones() {
-        assert!(SessionType::Rest.target_zones().is_empty());
-    }
-
-    // ── Phase ────────────────────────────────────────────────────────────────
-
-    #[test]
-    fn phase_labels_are_unique() {
-        let labels = [
-            Phase::BuildOne.label(),
-            Phase::BuildTwo.label(),
-            Phase::Peak.label(),
-            Phase::Taper.label(),
-        ];
-        let unique: std::collections::HashSet<_> = labels.iter().collect();
-        assert_eq!(unique.len(), 4, "all phase labels should be unique");
-    }
-
-    #[test]
-    fn phase_labels_are_nonempty() {
-        for phase in [Phase::BuildOne, Phase::BuildTwo, Phase::Peak, Phase::Taper] {
-            assert!(!phase.label().is_empty(), "{phase:?} label should not be empty");
-        }
+/// Estimated pace (min/km) for a session type. Used for duration capping.
+pub fn session_type_pace(session_type: &str) -> Option<f32> {
+    match session_type {
+        "easy" | "long" | "hike" => Some(6.5),
+        "tempo" => Some(5.5),
+        "interval" => Some(5.0),
+        "race" => Some(5.5),
+        _ => None,
     }
 }

@@ -1,141 +1,226 @@
 use sqlx::PgPool;
 use uuid::Uuid;
-use chrono::NaiveDate;
 
-use crate::models::plan::Plan;
+use crate::models::plan::{
+    FullPlan, FullWeek, Plan, PlanInsert, PlanWeek, Session,
+};
 
-pub async fn insert(
-    db: &PgPool,
-    plan: &Plan,
-    profile_id: Uuid,
-    race_date: Option<NaiveDate>,
-    race_goal: &str,
-) -> Result<Uuid, sqlx::Error> {
-    let weeks_json = serde_json::to_value(&plan.weeks).expect("plan serialization failed");
-    let num_weeks = plan.weeks.len() as i16;
-
-    let row = sqlx::query!(
-        r#"
-        INSERT INTO plans (id, user_id, profile_id, num_weeks, race_date, race_goal, weeks)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
-        RETURNING id
-        "#,
-        plan.id,
-        plan.user_id,
-        profile_id,
-        num_weeks,
-        race_date,
-        race_goal,
-        weeks_json,
-    )
-    .fetch_one(db)
-    .await?;
-
-    Ok(row.id)
-}
-
-pub async fn fetch_active(db: &PgPool, user_id: Uuid) -> Result<Option<Plan>, sqlx::Error> {
-    let row = sqlx::query!(
-        r#"
-        SELECT id, user_id, weeks
-        FROM plans
-        WHERE user_id = $1 AND active = TRUE
-        ORDER BY created_at DESC
-        LIMIT 1
-        "#,
-        user_id,
-    )
-    .fetch_optional(db)
-    .await?;
-
-    let Some(row) = row else { return Ok(None) };
-
-    let weeks = serde_json::from_value(row.weeks)
-        .map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
-
-    Ok(Some(Plan { id: row.id, user_id: row.user_id, weeks }))
-}
-
-pub async fn fetch_by_id(db: &PgPool, plan_id: Uuid, user_id: Uuid) -> Result<Option<Plan>, sqlx::Error> {
-    let row = sqlx::query!(
-        r#"
-        SELECT id, user_id, weeks
-        FROM plans
-        WHERE id = $1 AND user_id = $2
-        "#,
-        plan_id,
-        user_id,
-    )
-    .fetch_optional(db)
-    .await?;
-
-    let Some(row) = row else { return Ok(None) };
-
-    let weeks = serde_json::from_value(row.weeks)
-        .map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
-
-    Ok(Some(Plan { id: row.id, user_id: row.user_id, weeks }))
-}
-
-/// Persist updated weeks back to the database (after injury adaptation, feedback, etc.)
-pub async fn update_weeks(db: &PgPool, plan_id: Uuid, weeks: &[crate::models::plan::Week]) -> Result<(), sqlx::Error> {
-    let weeks_json = serde_json::to_value(weeks).expect("serialization failed");
-
-    sqlx::query!(
-        r#"
-        UPDATE plans
-        SET weeks = $1, updated_at = NOW()
-        WHERE id = $2
-        "#,
-        weeks_json,
-        plan_id,
-    )
-    .execute(db)
-    .await?;
-
-    Ok(())
-}
-
-/// Fetch the active plan with its creation timestamp (used to calculate current week).
-pub struct ActivePlanWithMeta {
-    pub plan: Plan,
-    pub created_at: chrono::DateTime<chrono::Utc>,
-}
-
-pub async fn fetch_active_with_meta(
-    db: &PgPool,
-    user_id: Uuid,
-) -> Result<Option<ActivePlanWithMeta>, sqlx::Error> {
-    let row = sqlx::query!(
-        r#"
-        SELECT id, user_id, weeks, created_at
-        FROM plans
-        WHERE user_id = $1 AND active = TRUE
-        ORDER BY created_at DESC
-        LIMIT 1
-        "#,
-        user_id,
-    )
-    .fetch_optional(db)
-    .await?;
-
-    let Some(row) = row else { return Ok(None) };
-
-    let weeks = serde_json::from_value(row.weeks)
-        .map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
-
-    Ok(Some(ActivePlanWithMeta {
-        plan: Plan { id: row.id, user_id: row.user_id, weeks },
-        created_at: row.created_at,
-    }))
-}
-
+/// Deactivate all existing plans for a user.
 pub async fn deactivate_all(db: &PgPool, user_id: Uuid) -> Result<(), sqlx::Error> {
-    sqlx::query!(
-        "UPDATE plans SET active = FALSE WHERE user_id = $1",
-        user_id,
+    sqlx::query("UPDATE plans SET active = false, updated_at = NOW() WHERE user_id = $1 AND active = true")
+        .bind(user_id)
+        .execute(db)
+        .await?;
+    Ok(())
+}
+
+/// Insert a full plan with weeks and sessions in a single transaction.
+pub async fn insert_full(db: &PgPool, input: &PlanInsert) -> Result<Uuid, sqlx::Error> {
+    let mut tx = db.begin().await?;
+
+    // Deactivate existing plans
+    sqlx::query("UPDATE plans SET active = false, updated_at = NOW() WHERE user_id = $1 AND active = true")
+        .bind(input.user_id)
+        .execute(&mut *tx)
+        .await?;
+
+    // Insert plan
+    let (plan_id,) = sqlx::query_as::<_, (Uuid,)>(
+        r#"INSERT INTO plans (user_id, race_goal, race_goal_km, race_time_goal, race_date, terrain, num_weeks, start_km)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+           RETURNING id"#,
     )
+    .bind(input.user_id)
+    .bind(&input.race_goal)
+    .bind(input.race_goal_km)
+    .bind(&input.race_time_goal)
+    .bind(input.race_date)
+    .bind(&input.terrain)
+    .bind(input.weeks.len() as i16)
+    .bind(input.start_km)
+    .fetch_one(&mut *tx)
+    .await?;
+
+    // Insert weeks and sessions
+    for week in &input.weeks {
+        let (week_id,) = sqlx::query_as::<_, (Uuid,)>(
+            r#"INSERT INTO plan_weeks (plan_id, week_number, phase, target_km, is_recovery, notes)
+               VALUES ($1, $2, $3, $4, $5, $6)
+               RETURNING id"#,
+        )
+        .bind(plan_id)
+        .bind(week.week_number)
+        .bind(&week.phase)
+        .bind(week.target_km)
+        .bind(week.is_recovery)
+        .bind(&week.notes)
+        .fetch_one(&mut *tx)
+        .await?;
+
+        for session in &week.sessions {
+            sqlx::query(
+                r#"INSERT INTO sessions (plan_week_id, user_id, weekday, session_type, target_km, target_duration_min, target_hr_zones, notes, sort_order)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)"#,
+            )
+            .bind(week_id)
+            .bind(input.user_id)
+            .bind(session.weekday)
+            .bind(&session.session_type)
+            .bind(session.target_km)
+            .bind(session.target_duration_min)
+            .bind(&session.target_hr_zones)
+            .bind(&session.notes)
+            .bind(session.sort_order)
+            .execute(&mut *tx)
+            .await?;
+        }
+    }
+
+    tx.commit().await?;
+    Ok(plan_id)
+}
+
+/// Fetch the active plan for a user, fully assembled with weeks and sessions.
+pub async fn fetch_active(db: &PgPool, user_id: Uuid) -> Result<Option<FullPlan>, sqlx::Error> {
+    let plan = sqlx::query_as::<_, Plan>(
+        "SELECT id, user_id, race_goal, race_goal_km, race_time_goal, race_date, terrain, num_weeks, start_km, active \
+         FROM plans WHERE user_id = $1 AND active = true ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(user_id)
+    .fetch_optional(db)
+    .await?;
+
+    match plan {
+        Some(plan) => assemble_full_plan(db, plan).await.map(Some),
+        None => Ok(None),
+    }
+}
+
+/// Fetch a plan by ID (scoped to user).
+pub async fn fetch_by_id(
+    db: &PgPool,
+    plan_id: Uuid,
+    user_id: Uuid,
+) -> Result<Option<FullPlan>, sqlx::Error> {
+    let plan = sqlx::query_as::<_, Plan>(
+        "SELECT id, user_id, race_goal, race_goal_km, race_time_goal, race_date, terrain, num_weeks, start_km, active \
+         FROM plans WHERE id = $1 AND user_id = $2",
+    )
+    .bind(plan_id)
+    .bind(user_id)
+    .fetch_optional(db)
+    .await?;
+
+    match plan {
+        Some(plan) => assemble_full_plan(db, plan).await.map(Some),
+        None => Ok(None),
+    }
+}
+
+/// Assemble a full plan from a Plan row by fetching weeks and sessions.
+async fn assemble_full_plan(db: &PgPool, plan: Plan) -> Result<FullPlan, sqlx::Error> {
+    let weeks = sqlx::query_as::<_, PlanWeek>(
+        "SELECT id, plan_id, week_number, phase, target_km, is_recovery, notes \
+         FROM plan_weeks WHERE plan_id = $1 ORDER BY week_number",
+    )
+    .bind(plan.id)
+    .fetch_all(db)
+    .await?;
+
+    let sessions = sqlx::query_as::<_, Session>(
+        "SELECT s.id, s.plan_week_id, s.user_id, s.weekday, s.session_type, s.target_km, \
+         s.target_duration_min, s.target_hr_zones, s.notes, s.sort_order \
+         FROM sessions s \
+         JOIN plan_weeks pw ON s.plan_week_id = pw.id \
+         WHERE pw.plan_id = $1 \
+         ORDER BY pw.week_number, s.weekday",
+    )
+    .bind(plan.id)
+    .fetch_all(db)
+    .await?;
+
+    let full_weeks: Vec<FullWeek> = weeks
+        .into_iter()
+        .map(|week| {
+            let week_sessions: Vec<Session> = sessions
+                .iter()
+                .filter(|s| s.plan_week_id == week.id)
+                .cloned()
+                .collect();
+            FullWeek {
+                week,
+                sessions: week_sessions,
+            }
+        })
+        .collect();
+
+    Ok(FullPlan {
+        plan,
+        weeks: full_weeks,
+    })
+}
+
+/// Update a single session's fields.
+pub async fn update_session(
+    db: &PgPool,
+    session_id: Uuid,
+    user_id: Uuid,
+    session_type: Option<&str>,
+    target_km: Option<f32>,
+    notes: Option<&str>,
+) -> Result<bool, sqlx::Error> {
+    let result = sqlx::query(
+        r#"UPDATE sessions SET
+            session_type = COALESCE($3, session_type),
+            target_km = COALESCE($4, target_km),
+            notes = COALESCE($5, notes)
+           WHERE id = $1 AND user_id = $2"#,
+    )
+    .bind(session_id)
+    .bind(user_id)
+    .bind(session_type)
+    .bind(target_km)
+    .bind(notes)
     .execute(db)
     .await?;
-    Ok(())
+
+    Ok(result.rows_affected() > 0)
+}
+
+/// Fetch a single session by ID.
+pub async fn fetch_session(
+    db: &PgPool,
+    session_id: Uuid,
+    user_id: Uuid,
+) -> Result<Option<Session>, sqlx::Error> {
+    sqlx::query_as::<_, Session>(
+        "SELECT id, plan_week_id, user_id, weekday, session_type, target_km, target_duration_min, \
+         target_hr_zones, notes, sort_order FROM sessions WHERE id = $1 AND user_id = $2",
+    )
+    .bind(session_id)
+    .bind(user_id)
+    .fetch_optional(db)
+    .await
+}
+
+/// Fetch all sessions for a specific week in a plan.
+pub async fn fetch_week_sessions(
+    db: &PgPool,
+    plan_id: Uuid,
+    week_number: i16,
+    user_id: Uuid,
+) -> Result<Vec<Session>, sqlx::Error> {
+    sqlx::query_as::<_, Session>(
+        r#"SELECT s.id, s.plan_week_id, s.user_id, s.weekday, s.session_type, s.target_km,
+            s.target_duration_min, s.target_hr_zones, s.notes, s.sort_order
+           FROM sessions s
+           JOIN plan_weeks pw ON s.plan_week_id = pw.id
+           WHERE pw.plan_id = $1 AND pw.week_number = $2 AND s.user_id = $3
+           ORDER BY s.weekday"#,
+    )
+    .bind(plan_id)
+    .bind(week_number)
+    .bind(user_id)
+    .fetch_all(db)
+    .await
 }
