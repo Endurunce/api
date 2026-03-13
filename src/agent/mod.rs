@@ -1,4 +1,5 @@
 pub mod context;
+pub mod intake;
 pub mod memory;
 pub mod streaming;
 pub mod tools;
@@ -34,6 +35,8 @@ pub enum AgentTrigger {
         feeling: u8,
         notes: Option<String>,
     },
+    /// Start the conversational intake flow (new user onboarding)
+    StartIntake,
     /// Daily morning check-in (cron-triggered)
     DailyCheckIn,
     /// Week rollover
@@ -337,6 +340,15 @@ impl CoachAgent {
     }
 }
 
+/// A quick-reply button option sent to the client during intake.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QuickReply {
+    pub label: String,
+    pub value: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub emoji: Option<String>,
+}
+
 /// Events streamed to the WebSocket client
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -345,6 +357,10 @@ pub enum StreamEvent {
     ToolUse { tool: String, id: String, input: serde_json::Value },
     ToolResult { id: String, result: String },
     PlanUpdated { plan_id: String, week: Option<u32> },
+    QuickReplies {
+        question_id: String,
+        options: Vec<QuickReply>,
+    },
     MessageEnd,
     Error { message: String },
 }
@@ -368,6 +384,7 @@ pub enum AgentError {
 fn trigger_to_message(trigger: &AgentTrigger) -> String {
     match trigger {
         AgentTrigger::ChatMessage { content } => content.clone(),
+        AgentTrigger::StartIntake => "[INTAKE START] Begin het intake-gesprek met de nieuwe gebruiker.".to_string(),
         AgentTrigger::InjuryReport {
             locations,
             severity,
@@ -423,6 +440,7 @@ fn trigger_to_message(trigger: &AgentTrigger) -> String {
 fn trigger_type_name(trigger: &AgentTrigger) -> String {
     match trigger {
         AgentTrigger::ChatMessage { .. } => "chat".into(),
+        AgentTrigger::StartIntake => "start_intake".into(),
         AgentTrigger::InjuryReport { .. } => "injury_report".into(),
         AgentTrigger::SessionFeedback { .. } => "session_feedback".into(),
         AgentTrigger::DailyCheckIn => "daily_checkin".into(),

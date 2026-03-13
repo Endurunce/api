@@ -162,6 +162,9 @@ pub fn build_router(state: AppState) -> Router {
         )
         // Conversation history (protected)
         .route("/api/conversations", get(routes::conversations::list))
+        // Intake — conversational onboarding (REST)
+        .route("/api/intake/start", post(routes::intake::start))
+        .route("/api/intake/reply", post(routes::intake::reply))
         // AI Coach Agent — WebSocket streaming
         .route("/api/ws", get(agent::streaming::ws_handler))
         // Admin (protected + is_admin)

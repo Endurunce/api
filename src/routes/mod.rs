@@ -7,6 +7,7 @@ pub mod feedback;
 pub mod google;
 pub mod health;
 pub mod injuries;
+pub mod intake;
 pub mod oauth_session;
 pub mod plans;
 pub mod test_helpers;
