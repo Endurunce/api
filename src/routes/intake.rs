@@ -46,9 +46,10 @@ pub async fn start(
     while let Some(event) = rx.recv().await {
         match event {
             StreamEvent::TextDelta { delta } => question.push_str(&delta),
-            StreamEvent::QuickReplies { question_id: qid, options } => {
+            StreamEvent::QuickReplies { question_id: qid, options, input_type: itype } => {
                 question_id = Some(qid);
                 quick_replies = Some(options);
+                let _ = itype; // Used in WS path, REST doesn't need it
             }
             _ => {}
         }

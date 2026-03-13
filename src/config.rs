@@ -52,7 +52,7 @@ impl Config {
                 .unwrap_or_else(|_| "https://admin.endurunce.nl".into()),
             anthropic_api_key: std::env::var("ANTHROPIC_API_KEY").ok(),
             anthropic_model: std::env::var("ANTHROPIC_MODEL")
-                .unwrap_or_else(|_| "claude-sonnet-4-6".into()),
+                .unwrap_or_else(|_| "claude-sonnet-4-20250514".into()),
             allowed_origins,
         }
     }

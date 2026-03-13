@@ -349,6 +349,24 @@ pub struct QuickReply {
     pub emoji: Option<String>,
 }
 
+/// Input type hint for the client — determines which UI widget to show.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InputType {
+    /// Standard quick-reply chips (default)
+    Chips,
+    /// Multi-select toggle chips with confirm button
+    MultiChips,
+    /// Native date picker
+    DatePicker,
+    /// Numeric keyboard
+    Number,
+    /// Duration/time picker (HH:MM:SS)
+    DurationPicker,
+    /// Free text input (default text keyboard)
+    Text,
+}
+
 /// Events streamed to the WebSocket client
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -360,6 +378,8 @@ pub enum StreamEvent {
     QuickReplies {
         question_id: String,
         options: Vec<QuickReply>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        input_type: Option<InputType>,
     },
     MessageEnd,
     Error { message: String },

@@ -10,7 +10,7 @@ use crate::models::profile::{
     Terrain, Weekday, PreviousUltra,
 };
 
-use super::{CoachAgent, QuickReply, StreamEvent};
+use super::{CoachAgent, InputType, QuickReply, StreamEvent};
 
 // ── Intake steps ──────────────────────────────────────────────────────────────
 
@@ -76,23 +76,29 @@ impl IntakeStep {
         }
     }
 
-    /// Returns quick reply options for applicable steps.
-    fn quick_replies(&self) -> Option<(String, Vec<QuickReply>)> {
+    /// Returns quick reply options and input type for applicable steps.
+    fn quick_replies(&self) -> Option<(String, Vec<QuickReply>, InputType)> {
         match self {
             Self::Welcome => Some(("welcome".into(), vec![
                 QuickReply { label: "Laten we beginnen! 💪".into(), value: "start".into(), emoji: Some("💪".into()) },
-            ])),
+            ], InputType::Chips)),
+            Self::Name => Some(("name".into(), vec![], InputType::Text)),
+            Self::DateOfBirth => Some(("date_of_birth".into(), vec![], InputType::DatePicker)),
             Self::Gender => Some(("gender".into(), vec![
                 QuickReply { label: "Man".into(), value: "male".into(), emoji: Some("♂️".into()) },
                 QuickReply { label: "Vrouw".into(), value: "female".into(), emoji: Some("♀️".into()) },
                 QuickReply { label: "Anders".into(), value: "other".into(), emoji: None },
-            ])),
+            ], InputType::Chips)),
             Self::Experience => Some(("experience".into(), vec![
                 QuickReply { label: "< 2 jaar".into(), value: "less_than_two_years".into(), emoji: Some("🌱".into()) },
                 QuickReply { label: "2–5 jaar".into(), value: "two_to_five_years".into(), emoji: Some("🌿".into()) },
                 QuickReply { label: "5–10 jaar".into(), value: "five_to_ten_years".into(), emoji: Some("🌳".into()) },
                 QuickReply { label: "10+ jaar".into(), value: "more_than_ten_years".into(), emoji: Some("🏔️".into()) },
-            ])),
+            ], InputType::Chips)),
+            Self::WeeklyKm => Some(("weekly_km".into(), vec![], InputType::Number)),
+            Self::Performance => Some(("performance".into(), vec![
+                QuickReply { label: "Overslaan".into(), value: "skip".into(), emoji: Some("⏭️".into()) },
+            ], InputType::DurationPicker)),
             Self::RaceGoal => Some(("race_goal".into(), vec![
                 QuickReply { label: "5 km".into(), value: "five_km".into(), emoji: Some("⚡".into()) },
                 QuickReply { label: "10 km".into(), value: "ten_km".into(), emoji: Some("🎯".into()) },
@@ -100,7 +106,8 @@ impl IntakeStep {
                 QuickReply { label: "Marathon".into(), value: "marathon".into(), emoji: Some("🏆".into()) },
                 QuickReply { label: "50 km".into(), value: "fifty_km".into(), emoji: Some("🦅".into()) },
                 QuickReply { label: "100 km".into(), value: "hundred_km".into(), emoji: Some("🔥".into()) },
-            ])),
+            ], InputType::Chips)),
+            Self::RaceDate => Some(("race_date".into(), vec![], InputType::DatePicker)),
             Self::TrainingDays => Some(("training_days".into(), vec![
                 QuickReply { label: "Ma".into(), value: "0".into(), emoji: None },
                 QuickReply { label: "Di".into(), value: "1".into(), emoji: None },
@@ -109,7 +116,7 @@ impl IntakeStep {
                 QuickReply { label: "Vr".into(), value: "4".into(), emoji: None },
                 QuickReply { label: "Za".into(), value: "5".into(), emoji: None },
                 QuickReply { label: "Zo".into(), value: "6".into(), emoji: None },
-            ])),
+            ], InputType::MultiChips)),
             Self::LongRunDay => Some(("long_run_day".into(), vec![
                 QuickReply { label: "Ma".into(), value: "0".into(), emoji: None },
                 QuickReply { label: "Di".into(), value: "1".into(), emoji: None },
@@ -118,15 +125,18 @@ impl IntakeStep {
                 QuickReply { label: "Vr".into(), value: "4".into(), emoji: None },
                 QuickReply { label: "Za".into(), value: "5".into(), emoji: None },
                 QuickReply { label: "Zo".into(), value: "6".into(), emoji: None },
-            ])),
+            ], InputType::Chips)),
+            Self::HeartRate => Some(("heart_rate".into(), vec![
+                QuickReply { label: "Weet ik niet".into(), value: "skip".into(), emoji: Some("🤷".into()) },
+            ], InputType::Number)),
             Self::Health => Some(("health".into(), vec![
                 QuickReply { label: "Geen klachten ✅".into(), value: "nee".into(), emoji: Some("✅".into()) },
-            ])),
+            ], InputType::Text)),
             Self::Summary => Some(("summary".into(), vec![
                 QuickReply { label: "Ziet er goed uit! 🚀".into(), value: "confirm".into(), emoji: Some("🚀".into()) },
                 QuickReply { label: "Opnieuw beginnen".into(), value: "restart".into(), emoji: Some("🔄".into()) },
-            ])),
-            _ => None,
+            ], InputType::Chips)),
+            Self::Done => None,
         }
     }
 }
@@ -324,10 +334,11 @@ pub async fn handle_reply(
                 let _ = tx.send(StreamEvent::MessageEnd).await;
 
                 // Send summary quick replies
-                if let Some((qid, opts)) = IntakeStep::Summary.quick_replies() {
+                if let Some((qid, opts, itype)) = IntakeStep::Summary.quick_replies() {
                     let _ = tx.send(StreamEvent::QuickReplies {
                         question_id: qid,
                         options: opts,
+                        input_type: Some(itype),
                     }).await;
                 }
                 return Ok(true);
@@ -354,10 +365,11 @@ pub async fn handle_reply(
             let _ = tx.send(StreamEvent::TextDelta { delta: msg }).await;
             let _ = tx.send(StreamEvent::MessageEnd).await;
             // Re-send the same step's quick replies
-            if let Some((qid, opts)) = current_step.quick_replies() {
+            if let Some((qid, opts, itype)) = current_step.quick_replies() {
                 let _ = tx.send(StreamEvent::QuickReplies {
                     question_id: qid,
                     options: opts,
+                    input_type: Some(itype),
                 }).await;
             }
             Ok(true)
@@ -569,10 +581,11 @@ async fn send_step(
     let _ = tx.send(StreamEvent::MessageEnd).await;
 
     // Send quick replies if applicable
-    if let Some((question_id, options)) = step.quick_replies() {
+    if let Some((question_id, options, input_type)) = step.quick_replies() {
         let _ = tx.send(StreamEvent::QuickReplies {
             question_id,
             options,
+            input_type: Some(input_type),
         }).await;
     }
 
